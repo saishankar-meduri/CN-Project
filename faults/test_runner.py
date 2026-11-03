@@ -188,10 +188,14 @@ def parse_controller_anomaly(controller_lines, fault_ts, scenario):
         re.compile(r"^\[?(\d{10}(?:\.\d+)?)\]?\s*(.*)$"),
     ]
 
-    anomaly_tags = [
-        "anomaly", "alert", "detect", "detection", "warning",
-        "alarm", "action", "mitigation", "reroute", "rate-limit"
-    ]
+    # Only explicit scenario-specific anomaly labels count as detection.
+    expected_tags = {
+        "flood": ("[congestion/flood]",),
+        "delay": ("[host/app problem]", "[congestion/flood]"),
+        "loss": ("[packet loss]",),
+        "killagent": ("[agent crash]",),
+        "linkdown": ("[host/link down]",),
+    }.get(scenario["id"], ())
 
     for line in controller_lines:
         line_clean = line.strip()
@@ -211,25 +215,16 @@ def parse_controller_anomaly(controller_lines, fault_ts, scenario):
                     break
 
         line_lower = content.lower()
-        is_anomaly_candidate = any(tag in line_lower for tag in anomaly_tags)
-        is_keyword_match = any(kw.lower() in line_lower for kw in scenario["keywords"])
+        is_expected_anomaly = any(tag in line_lower for tag in expected_tags)
 
-        # Check for anomaly detection
-        if (is_anomaly_candidate or is_keyword_match) and best_detection is None:
-            if line_ts is not None and fault_ts is not None:
-                # Discard events older than 0.2s before the fault injection
-                if line_ts >= (fault_ts - 0.2):
-                    dt = line_ts - fault_ts
-                    best_dt = max(0.001, dt)
-                    best_detection = (line_ts, content)
-            elif fault_ts is not None:
-                # If no timestamp parsed, assume detected within window
-                best_detection = (fault_ts + 1.5, content)
-                best_dt = 1.5
+        if is_expected_anomaly and best_detection is None and line_ts is not None and fault_ts is not None:
+            if line_ts >= (fault_ts - 0.2):
+                best_dt = max(0.0, line_ts - fault_ts)
+                best_detection = (line_ts, content)
 
-        # Check for dynamic recovery action
-        if any(act in line_lower for act in ["rerout", "rate-limit", "drop", "recover", "mitigat"]):
-            if line_ts and fault_ts and line_ts >= fault_ts:
+        # Action time is recorded separately; it is not proof of service recovery.
+        if "[action]" in line_lower and line_ts is not None and fault_ts is not None:
+            if line_ts >= fault_ts:
                 recovery_ts = line_ts
                 action_text = content
 
@@ -491,7 +486,8 @@ def run_single_scenario(
         "actual_detection": actual_detection,
         "detected": detected,
         "time_to_detect_sec": detect_dt,
-        "time_to_recover_sec": recovery_time,
+        "time_to_action_sec": action_time if not dry_run else None,
+        "time_to_recover_sec": None,  # Requires independent traffic/RTT/loss measurements.
         "timestamps": {
             "run_started": run_timestamp_iso,
             "fault_injected": fault_ts,
@@ -517,7 +513,7 @@ def print_summary_table(results):
         "Expected Detection",
         "Actual Detection",
         "Time to Detect",
-        "Time to Recover",
+        "Time to Recover (measured)",
         "Status",
     ]
 
@@ -526,8 +522,8 @@ def print_summary_table(results):
         detect_str = f"{r['time_to_detect_sec']:.2f}s" if r["time_to_detect_sec"] is not None else "N/A"
         recover_str = (
             f"{r['time_to_recover_sec']:.2f}s"
-            if r["time_to_recover_sec"] is not None
-            else ("N/A (baseline)" if r["mode"] == "baseline" else "N/A")
+            if r.get("time_to_recover_sec") is not None
+            else "Not measured"
         )
         status_str = "PASS" if r["detected"] else "FAIL"
 
@@ -642,15 +638,36 @@ def main():
     log_runner(f"Detection window : {args.detection_window}s")
 
     if not args.dry_run:
-        # Check if controller is running
-        if is_controller_listening():
-            log_runner("Verified: Controller is listening on port 6653.")
-        else:
-            log_runner("NOTE: Controller port 6653 is not currently reachable.")
-            log_runner("Ensure Ryu controller is running: ryu-manager controller/sdn_controller.py --mode=<mode>")
-            if os.name == "nt":
-                log_runner("Running on Windows: defaulting to --dry-run for compatibility.")
-                args.dry_run = True
+        if args.mode == "both":
+            parser.error(
+                "Live --mode both is unsafe: this runner cannot restart/reconfigure Ryu. "
+                "Run one batch at a time and restart Ryu with the matching --mode."
+            )
+        if not is_controller_listening():
+            parser.error(
+                "Ryu is not listening on 127.0.0.1:6653. Start it first with "
+                "'ryu-manager controller/sdn_controller.py --mode=<baseline|dynamic>'."
+            )
+        log_runner("Verified: Controller is listening on port 6653.")
+
+        # Confirm the latest startup marker belongs to the requested controller mode.
+        controller_lines = read_file_tail(args.controller_log, max_lines=500)
+        mode_markers = [
+            line for line in controller_lines
+            if "SDN Controller initialized. Mode:" in line
+        ]
+        if not mode_markers:
+            parser.error(
+                f"No controller startup/mode marker found in {args.controller_log}; "
+                "check the controller log path and restart Ryu."
+            )
+        latest_mode = re.search(r"Mode:\s*\[(BASELINE|DYNAMIC)\]", mode_markers[-1], re.I)
+        actual_mode = latest_mode.group(1).lower() if latest_mode else "unknown"
+        if actual_mode != args.mode:
+            parser.error(
+                f"Requested {args.mode} batch but controller log reports {actual_mode}. "
+                "Restart Ryu with the matching --mode before running."
+            )
 
     all_results = []
 
