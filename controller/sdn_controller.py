@@ -737,6 +737,16 @@ class SDNController(app_manager.RyuApp):
                     if self.mode == "dynamic":
                         self._handle_dynamic_congestion(host_id, mac, dpid, throughput_bps)
 
+                elif float(metrics.get("probe_loss_pct", 0.0)) >= 20.0:
+                    # Rule 3: Probe loss is independently visible even when telemetry itself arrives.
+                    loss_pct = float(metrics.get("probe_loss_pct", 0.0))
+                    self.log_event(
+                        f"ANOMALY DETECTED [PACKET LOSS] on {host_id}: "
+                        f"Probe loss = {loss_pct:.1f}% (threshold = 20.0%).",
+                        level="ANOMALY",
+                    )
+                    # Detection only: no automatic reroute is claimed for packet loss.
+
                 elif latency_ms > CONGESTION_LATENCY_THRESHOLD_MS and throughput_bps <= CONGESTION_THROUGHPUT_THRESHOLD_BPS:
                     # Rule 2: High latency (>100ms) AND throughput normal -> HOST/APP PROBLEM
                     self.log_event(
