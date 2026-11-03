@@ -173,7 +173,6 @@ class SDNController(app_manager.RyuApp):
         self.prev_port_stats = {}  # (dpid, port_no) -> {"rx_bytes": int, "tx_bytes": int, "time": float}
         self.port_throughput = {}  # (dpid, port_no) -> {"rx_bps": float, "tx_bps": float, "max_bps": float}
         self.flow_throughput = {}  # flow_signature -> bps
-        self.seen_broadcasts = {}  # packet_hash -> timestamp (loop prevention)
         self.dropped_macs = {}     # mac -> unblock_timestamp
         self.active_reroutes = set()  # set of rerouted link pairs
 
@@ -452,26 +451,39 @@ class SDNController(app_manager.RyuApp):
                     level="RECOVERY",
                 )
 
-        # Standard MAC learning on the current switch
+        # Learn sources dynamically, but keep configured host attachments
+        # authoritative. A known host seen on another port must not poison the
+        # forwarding table for that host.
         self.mac_to_port.setdefault(dpid, {})
-        self.mac_to_port[dpid][src] = in_port
+        inter_switch_ports = {
+            port
+            for (switch_dpid, _peer_dpid), port in INTER_SWITCH_PORTS.items()
+            if switch_dpid == dpid
+        }
+        source_host = self.mac_to_host.get(src)
+        if source_host is None:
+            self.mac_to_port[dpid][src] = in_port
+        else:
+            source_meta = KNOWN_HOSTS[source_host]
+            expected_dpid = source_meta["dpid"]
+            expected_port = source_meta["port"]
+            if dpid == expected_dpid and in_port == expected_port:
+                self.mac_to_port[dpid][src] = in_port
+            elif in_port not in inter_switch_ports:
+                self.log_event(
+                    f"Ignoring invalid source location for known host MAC {src}: "
+                    f"expected DPID {expected_dpid}/port {expected_port}, "
+                    f"observed DPID {dpid}/port {in_port}",
+                    level="WARNING",
+                )
 
-        # Broadcast & Multicast storm prevention in the triangle topology
-        is_broadcast = (dst == "ff:ff:ff:ff:ff:ff") or dst.startswith("01:00:5e")
-        if is_broadcast:
-            # Deduplicate broadcast datagrams across the triangle loop
-            pkt_hash = hash((src, dst, eth.ethertype, msg.data[:64]))
-            if pkt_hash in self.seen_broadcasts:
-                if now - self.seen_broadcasts[pkt_hash] < 2.0:
-                    # Drop duplicate broadcast packet circulating the triangle
-                    return
-            self.seen_broadcasts[pkt_hash] = now
-            if len(self.seen_broadcasts) > 2000:
-                self.seen_broadcasts = {k: v for k, v in self.seen_broadcasts.items() if now - v < 2.0}
-
+        # Broadcast and all Ethernet multicast (including IPv6 33:33) use
+        # split-horizon forwarding to avoid circulating around the triangle.
+        is_multicast = bool(int(dst.split(":", 1)[0], 16) & 1)
+        if is_multicast:
             # Forward broadcast intelligently:
             # If arriving on an inter-switch link, deliver ONLY to local host ports
-            if in_port in {3, 4}:
+            if in_port in inter_switch_ports:
                 target_ports = [p for p in HOST_ACCESS_PORTS.get(dpid, set()) if p != in_port]
                 actions = [parser.OFPActionOutput(p) for p in target_ports]
             else:
@@ -488,20 +500,20 @@ class SDNController(app_manager.RyuApp):
             datapath.send_msg(out)
             return
 
-        # Unicast Forwarding
-        if dst in self.mac_to_port[dpid]:
+        # Unicast Forwarding. Configured host locations take precedence over
+        # learned entries; learning remains available for unknown MACs.
+        if dst in self.mac_to_host:
+            target_host = self.mac_to_host[dst]
+            target_meta = KNOWN_HOSTS[target_host]
+            target_dpid = target_meta["dpid"]
+            if target_dpid == dpid:
+                out_port = target_meta["port"]
+            else:
+                out_port = INTER_SWITCH_PORTS.get((dpid, target_dpid), ofproto.OFPP_FLOOD)
+        elif dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
         else:
-            # If destination is a known host, route towards the appropriate switch
-            if dst in self.mac_to_host:
-                target_host = self.mac_to_host[dst]
-                target_dpid = KNOWN_HOSTS[target_host]["dpid"]
-                if target_dpid == dpid:
-                    out_port = KNOWN_HOSTS[target_host]["port"]
-                else:
-                    out_port = INTER_SWITCH_PORTS.get((dpid, target_dpid), ofproto.OFPP_FLOOD)
-            else:
-                out_port = ofproto.OFPP_FLOOD
+            out_port = ofproto.OFPP_FLOOD
 
         actions = [parser.OFPActionOutput(out_port)]
 
