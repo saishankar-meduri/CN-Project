@@ -359,12 +359,12 @@ def simulate_dry_run(scenario, mode, outdir, fault_log_path, controller_log_path
 
     return {
         "fault_timestamp": t_fault,
-        "detection_timestamp": t_detect,
-        "detection_time": round(detect_dt, 3),
-        "detected": True,
-        "actual_detection": f"{scenario['expected_detection']} detected on target",
-        "recovery_time": round(detect_dt + 0.85, 3) if mode == "dynamic" else None,
-        "stdout_tail": ["[DRY-RUN] Simulation successful"],
+        "detection_timestamp": None,
+        "detection_time": None,
+        "detected": None,
+        "actual_detection": "DRY-RUN ONLY - no network detection was performed",
+        "recovery_time": None,
+        "stdout_tail": ["[DRY-RUN] Synthetic files only; no Mininet/controller test ran"],
     }
 
 
@@ -479,6 +479,7 @@ def run_single_scenario(
     log_runner(f"Result: Detected={detected} | Time-to-detect={detect_dt}s | Actual='{actual_detection}'")
 
     result = {
+        "dry_run": dry_run,
         "scenario": scenario["id"],
         "scenario_name": scenario["name"],
         "mode": mode,
@@ -526,7 +527,10 @@ def print_summary_table(results):
             if r.get("time_to_recover_sec") is not None
             else "Not measured"
         )
-        status_str = "PASS" if r["detected"] else "FAIL"
+        status_str = (
+            "SIMULATED" if r.get("dry_run")
+            else ("PASS" if r["detected"] else "FAIL")
+        )
 
         # Truncate strings if too wide for the table
         act = r["actual_detection"]
