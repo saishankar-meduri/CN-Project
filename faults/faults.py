@@ -31,19 +31,30 @@ def log_event(text):
 
 
 class FaultCLI(CLI):
-    downed = []
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.downed = []
+
+    @staticmethod
+    def _stop_agents(net):
+        """Stop telemetry agents in every host namespace."""
+        for host in PEERS:
+            # The bracket expression prevents pkill from matching its own shell command.
+            net[host].cmd("pkill -f '[a]gent.py' 2>/dev/null || true")
 
     def do_agents(self, line):
         """agents start|stop"""
         net = self.mn
         if line.strip() == "start":
+            # Make start idempotent so repeated demos do not create duplicate agents.
+            self._stop_agents(net)
             for h, peer in PEERS.items():
                 net[h].cmd("python3 %s --id=%s --peer %s > /dev/null 2>&1 &"
                            % (AGENT, h, net[peer].IP()))
-            log_event("agents started")
+            log_event("agents started on all six hosts")
         elif line.strip() == "stop":
-            net["h1"].cmd("pkill -f agent.py")
-            log_event("agents stopped")
+            self._stop_agents(net)
+            log_event("agents stopped on all six hosts")
         else:
             print("usage: agents start|stop")
 
@@ -66,16 +77,21 @@ class FaultCLI(CLI):
                 net[a[1]].cmd("tc qdisc replace dev %s-eth0 root netem loss %s%%" % (a[1], a[2]))
                 log_event("loss %s %s%%" % (a[1], a[2]))
             elif kind == "killagent":
-                net[a[1]].cmd("pkill -f -- '--id=%s'" % a[1])
-                log_event("killagent %s" % a[1])
+                host = a[1]
+                if host not in PEERS:
+                    raise KeyError(host)
+                # Match the agent command line without matching this pkill shell.
+                net[host].cmd("pkill -f '[a]gent.py.*--id=%s' 2>/dev/null || true" % host)
+                log_event("killagent %s" % host)
             elif kind == "linkdown":
                 net.configLinkStatus(a[1], a[2], "down")
                 self.downed.append((a[1], a[2]))
                 log_event("linkdown %s-%s" % (a[1], a[2]))
             elif kind == "clear":
-                for h in ("h1", "h2", "h3", "h4", "h5", "h6"):
+                for h in PEERS:
                     net[h].cmd("tc qdisc del dev %s-eth0 root 2>/dev/null" % h)
-                net["h1"].cmd("pkill iperf")
+                    net[h].cmd("pkill iperf 2>/dev/null || true")
+                self._stop_agents(net)
                 for s1, s2 in self.downed:
                     net.configLinkStatus(s1, s2, "up")
                 self.downed = []
