@@ -737,6 +737,16 @@ class SDNController(app_manager.RyuApp):
                     if self.mode == "dynamic":
                         self._handle_dynamic_congestion(host_id, mac, dpid, throughput_bps)
 
+                elif float(metrics.get("probe_loss_pct", 0.0)) >= 20.0:
+                    # Rule 3: Probe loss is independently visible even when telemetry itself arrives.
+                    loss_pct = float(metrics.get("probe_loss_pct", 0.0))
+                    self.log_event(
+                        f"ANOMALY DETECTED [PACKET LOSS] on {host_id}: "
+                        f"Probe loss = {loss_pct:.1f}% (threshold = 20.0%).",
+                        level="ANOMALY",
+                    )
+                    # Detection only: no automatic reroute is claimed for packet loss.
+
                 elif latency_ms > CONGESTION_LATENCY_THRESHOLD_MS and throughput_bps <= CONGESTION_THROUGHPUT_THRESHOLD_BPS:
                     # Rule 2: High latency (>100ms) AND throughput normal -> HOST/APP PROBLEM
                     self.log_event(
@@ -766,14 +776,9 @@ class SDNController(app_manager.RyuApp):
                 if match_dict.get("eth_src") == mac or match_dict.get("eth_dst") == mac:
                     return True
 
-        # 3. Check raw packet counters in flow stats
-        dp_flows = self.flow_stats.get(dpid, {}).get("flows", [])
-        for f in dp_flows:
-            match_dict = dict(f["match"].items())
-            if match_dict.get("eth_src") == mac or match_dict.get("eth_dst") == mac:
-                if f["packet_count"] > 0:
-                    return True
-
+        # Do not treat cumulative packet_count > 0 as live traffic: counters remain
+        # non-zero after an agent dies and would misclassify stale flows as active.
+        # The rate-based checks above use deltas from successive stats replies.
         return False
 
     def _get_host_throughput(self, mac: str, dpid: int, port: int) -> float:

@@ -92,6 +92,7 @@ def main():
                 "app_latency_ms": round(lat, 2),
                 "req_per_sec": round(rps, 1),
                 "error_count": err,  # probe timeouts this interval
+                "probe_loss_pct": round((err / max(a.probes, 1)) * 100.0, 2),
                 "cpu_percent": psutil.cpu_percent(interval=None) if psutil else 0.0,
                 "mem_percent": psutil.virtual_memory().percent if psutil else 0.0,
             },
