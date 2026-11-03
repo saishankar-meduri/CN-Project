@@ -12,6 +12,7 @@ Usage (inside a Mininet host):
 """
 import argparse
 import json
+import os
 import socket
 import threading
 import time
@@ -62,6 +63,8 @@ def probe(peer, n, timeout):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--id", dest="host_id", required=True)
+    ap.add_argument("--run-id", default=os.environ.get("SDN_RUN_TOKEN", ""),
+                    help="run identifier used to verify process ownership")
     ap.add_argument("--peer", help="IP of the host to probe")
     ap.add_argument("--collector", default="10.0.0.254")
     ap.add_argument("--port", type=int, default=9999)

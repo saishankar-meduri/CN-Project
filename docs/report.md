@@ -116,7 +116,7 @@ Every datagram sent by an agent complies with the agreed JSON schema:
 ```
 Key fields include:
 - `host_id`: Unique identifier for topological mapping.
-- `seq`: Monotonically increasing sequence integer. Enables the controller to track packet loss and telemetry disruption without transport-level ACKs.
+- `seq`: Monotonically increasing sequence integer. The collector logs gaps and out-of-order datagrams; gaps do not currently trigger packet-loss classification.
 - `timestamp`: Epoch timestamp recorded immediately before transmission to detect transmission delay and drift.
 - `metrics.app_latency_ms`: Real RTT experienced by end-to-end application traffic.
 - `metrics.error_count`: Number of timed-out active probe packets during the interval.
@@ -171,7 +171,7 @@ The defining innovation of this system is the **Correlator Engine**, which fuses
                  v                                         v
           +-------------------------------------------------------+
           |         Cross-Layer Anomaly Correlator Engine         |
-          |  Evaluates multi-dimensional heuristics every 2.0s    |
+          |  Evaluates multi-dimensional heuristics every 5.0s    |
           +-------------------------------------------------------+
 ```
 
@@ -182,102 +182,94 @@ A background `hub.spawn` thread in Ryu executes a periodic polling loop every $2
 3. Computes instantaneous throughput per port and per flow:
    $$\text{Throughput (bps)} = \frac{(\text{bytes}_{t} - \text{bytes}_{t - \Delta t}) \times 8}{\Delta t}$$
 
-### 4.3 Anomaly Detection and Classification Rules
-The correlator evaluates the joint state space across four distinct anomaly quadrants:
+### 4.3 Implemented Detection and Response Rules
 
-| Quadrant | App Telemetry Condition | OpenFlow Statistics Condition | Inferred Root Cause | Action in Baseline | Action in Dynamic Mode |
-|---|---|---|---|---|---|
-| **I** | High Latency ($\text{RTT} > 100\text{ ms}$) OR High Error ($\text{err} > 1$) | High Port Throughput ($> 8.0\text{ Mbps}$ on 10 Mbps link) | **Network Congestion / Volumetric Flood** | Log anomaly warning | Rate-limit/Drop offending flow via `OFPFlowMod`; Reroute victim flows via alternate switch path |
-| **II** | High Latency ($\text{RTT} > 100\text{ ms}$) | Normal / Low Throughput ($< 3.0\text{ Mbps}$) | **Host / Application Bottleneck** (CPU/Memory exhaustion) | Log warning | Flag host; avoid destructive network rerouting |
-| **III** | Telemetry Missing ($t_{\text{now}} - t_{\text{last}} > 5.0\text{ s}$) | Flow Counters Actively Incrementing ($\Delta \text{packets} > 0$) | **Telemetry Agent Crash / Socket Failure** | Log critical warning | Preserve active data-plane flow rules; dispatch operator alert |
-| **IV** | Telemetry Missing ($t_{\text{now}} - t_{\text{last}} > 5.0\text{ s}$) | Flow Counters Stagnant ($\Delta \text{packets} == 0$) OR Port Down | **Host Failure or Physical Link Severed** | Log critical error | Flush stale flow table entries; recompute topological shortest path; install proactive bypass flow rules |
+The following rules describe the current controller implementation. Sequence gaps are logged by the telemetry collector, but are not by themselves a classification rule. The controller does not currently handle OpenFlow port-status events.
+
+| Condition | Controller classification | Baseline behavior | Dynamic behavior |
+|---|---|---|---|
+| App latency >100 ms and host access-port throughput >8 Mbps | Congestion/flood | Log anomaly | Find highest-rate host MAC, install priority 200 drop rules with 30 s hard timeout, then attempt alternate-path rules for other flows at priority 150 with 60 s timeout |
+| Probe loss >=20% | Packet loss | Log anomaly | Detection only; no reroute is issued |
+| App latency >100 ms and host access-port throughput <=8 Mbps | Host/app problem | Log anomaly | Log only; no network reroute |
+| No telemetry record yet, or last telemetry >5 s ago, and flow/port counters show activity | Agent crash | Log anomaly | Alert only; keep forwarding state |
+| No telemetry record yet, or last telemetry >5 s ago, and no active counters | Host/link down | Log anomaly | Delete host-MAC-matching flows and attempt alternate-path rules using the triangle mapping |
+
+For a host that has never reported, the implementation treats telemetry as missing immediately instead of waiting five seconds. It can therefore emit host/link-down anomalies before agents start. Evaluation runs should establish agent telemetry before fault injection and should not count these startup events as fault detections.
 
 ### 4.4 Dynamic Response Mechanism
-When running with the `--dynamic` flag enabled:
-- **Offender Suppression:** In Quadrant I (UDP flood), the controller inspects flow statistics to identify the 5-tuple consuming excessive bandwidth. It injects an `OFPFlowMod` entry at Priority 100 with an empty action set (hard drop) or applies an OpenFlow Meter table entry limiting the flow to $1\text{ Mbps}$.
-- **Dynamic Path Rerouting:** For affected legitimate flows (e.g., `h1 \to h4`), the controller recalculates the path through the third switch (`s1 \to s3 \to s2` instead of the direct `s1 \to s2`), installing forwarding rules with higher priority (Priority 50).
-- **Stale Flow Purging:** In Quadrant IV, the controller dispatches `OFPFlowMod` with command `OFPFC_DELETE` to remove dead routes, preventing black-holing of packets.
+
+Dynamic responses are implemented with fixed rules for the configured three-switch triangle. Congestion handling drops the selected source MAC across connected switches and attempts detours for non-offending flows. Host/link-down handling deletes flows matching the host MAC and attempts detours. Packet loss, high latency at lower throughput, and agent crashes are logged without a network reroute. These are source-level behaviors; their successful operation and service impact remain unverified until live evaluation.
 
 ---
 
 ## 5. Testing Methodology
 
 ### 5.1 Test Framework and Fault Injection
-To validate detection accuracy and mitigation efficiency, a dedicated fault-injection module (`faults.py`) was integrated into the Mininet CLI. Five realistic fault conditions were systematically evaluated:
+The test plan uses a dedicated fault-injection module (`faults.py`) integrated into the Mininet CLI. The following five conditions are planned for live evaluation:
 
-1. **UDP Flood Congestion:** Injected using `iperf` between `h1` and `h4` with bandwidth `-b 50M` over the 10 Mbps bottleneck link.
-2. **Link Latency Spikes:** Injected using Linux Traffic Control NetEm:
+1. **UDP Flood Congestion:** The runner starts a 50 Mbps UDP `iperf` flow from `h1` to `h4` for 20 seconds.
+2. **Link Latency:** Injected using Linux Traffic Control NetEm on `h2`:
    ```bash
-   tc qdisc replace dev h1-eth0 root netem delay 200ms
+   tc qdisc replace dev h2-eth0 root netem delay 200ms
    ```
-3. **Severe Packet Loss:** Injected via NetEm:
+3. **Packet Loss:** Injected via NetEm on `h3`:
    ```bash
-   tc qdisc replace dev h1-eth0 root netem loss 30%
+   tc qdisc replace dev h3-eth0 root netem loss 30%
    ```
-4. **Agent Process Crash:** Simulated by terminating the telemetry agent process on `h1`:
+4. **Agent Process Stop:** The runner terminates the telemetry agent process on `h5`:
    ```bash
-   pkill -f -- '--id=h1'
+   pkill -f -- '--id=h5'
    ```
-5. **Physical Link Disruption:** Severed the inter-switch trunk in Mininet:
+5. **Inter-switch Link Down:** The runner disables the `s1-s2` link through Mininet's `configLinkStatus`:
    ```bash
-   link s1 s2 down
+   fault linkdown s1 s2
    ```
 
 ### 5.2 Comparative Execution: Baseline vs. Dynamic
-Each of the 5 fault scenarios was executed under two operational modes:
-- **Baseline Mode:** The controller operates purely as a reactive learning switch. It runs the correlator and records anomalies to `logs/fault_events.log`, but performs no mitigation (`OFPFlowMod` modifications are disabled).
+The evaluation plan compares each of the five fault scenarios under two operational modes, in separate approved live batches:
+- **Baseline Mode:** The controller learns MAC forwarding rules and logs anomalies to `logs/controller.log`; it does not issue anomaly mitigation.
 - **Dynamic Mode:** The full closed-loop control system is enabled. Anomaly detection triggers automated flow table modifications, path recalculation, and traffic suppression.
 
 ### 5.3 Quantitative Performance Metrics
-For each test run, five metrics were measured:
+The intended measurements for each live run are:
 - **Time to Detect (TTD):** Elapsed duration between fault injection timestamp and the controller logging the verified anomaly.
-- **Time to Recover (TTR):** Elapsed duration from anomaly detection to the restoration of acceptable application performance (RTT $< 30\text{ ms}$, loss $< 5\%$, throughput $> 8\text{ Mbps}$).
-- **Application Latency:** Mean RTT recorded by host agents during steady-state fault and post-mitigation.
-- **Effective Throughput:** Sustained data transfer rate between victim hosts.
-- **Packet Loss Percentage:** Ratio of unacknowledged probe packets and dropped data segments.
+- **Time to Recover (TTR):** Elapsed duration from verified fault injection until two consecutive ICMP probes satisfy the run-relative RTT/loss threshold. Probes are sampled during the fault and after clear, so recovery can be detected during mitigation or after restoration. This confirms reachability for the probe pair, not telemetry-agent recovery.
+- **RTT and probe loss:** One ICMP echo per nominal one-second sample; each loss sample is 0% or 100% and is therefore coarse.
+- **Throughput:** RX+TX host-interface byte-counter rate in Mbps. This is aggregate host traffic, not flow-specific application goodput.
 
 ---
 
 ## 6. Performance Evaluation
 
-### 6.1 Results Table
-The experimental results across all 10 evaluation runs are summarized in the table below:
+### 6.1 Results status
 
-| Fault Injected | Expected Detection | Operating Mode | Actual Detection | Time to Detect (TTD) | Time to Recover (TTR) | Throughput (Victim) | Latency (RTT) | Packet Loss |
-|---|---|---|---|---|---|---|---|---|
-| **UDP Flood** | Congestion / Flood | Baseline | Congestion (High Lat + High TP) | 3.2 s | N/A (Persistent) | 0.82 Mbps | 452.4 ms | 68.4% |
-| **UDP Flood** | Congestion / Flood | Dynamic | Congestion (Mitigated via Drop) | 2.8 s | 6.4 s | 8.91 Mbps | 14.1 ms | 0.4% |
-| **Added Delay (200ms)** | Host/Link Latency Anomaly | Baseline | Latency Anomaly (TP Normal) | 4.2 s | N/A (Logged Only) | 9.38 Mbps | 212.8 ms | 0.0% |
-| **Added Delay (200ms)** | Host/Link Latency Anomaly | Dynamic | Latency Anomaly (Path Reroute) | 3.8 s | 8.2 s | 9.42 Mbps | 24.6 ms | 0.0% |
-| **Packet Loss (30%)** | Packet Loss / Telemetry Drop | Baseline | Loss Anomaly (Seq Gaps > 20%) | 5.4 s | N/A (Logged Only) | 2.14 Mbps | 48.2 ms | 31.2% |
-| **Packet Loss (30%)** | Packet Loss / Telemetry Drop | Dynamic | Loss Anomaly (Rerouted via s3) | 4.6 s | 7.8 s | 9.22 Mbps | 16.3 ms | 0.8% |
-| **Agent Killed** | Agent Crash (Flows Active) | Baseline | Agent Crash (Timeout 5s) | 6.2 s | N/A (Alert Only) | 9.45 Mbps | 13.8 ms | 0.0% |
-| **Agent Killed** | Agent Crash (Flows Active) | Dynamic | Agent Crash (Preserve Flows) | 5.9 s | 6.1 s (Flows Maintained) | 9.46 Mbps | 13.7 ms | 0.0% |
-| **Link Down (s1-s2)** | Link Failure (No Flows/Telemetry) | Baseline | Link Failure / Flow Stagnation | 8.2 s | N/A (Black-holed) | 0.00 Mbps | $\infty$ (Timeout) | 100.0% |
-| **Link Down (s1-s2)** | Link Failure (No Flows/Telemetry) | Dynamic | Link Failure (Rerouted s1-s3-s2)| 7.6 s | 11.5 s | 8.78 Mbps | 18.9 ms | 1.2% |
+**Fault-evaluation performance results are pending.** Connectivity validation on kernel `7.2.14-arch1-1` passed for the six hosts and NAT, but no real fault-injection evaluation is reported here. Earlier setup failures on the previous kernel remain historical setup-failure records under `logs/`; they contain no fault detections or service measurements. Pre-existing synthetic JSON and the historical simulated report are not experimental evidence. No performance values are reported here.
 
-### 6.2 Analysis of Experimental Findings
+| Scenario | Mode | Detection time | Recovery time | Throughput | RTT | Packet loss |
+|---|---|---|---|---|---|---|
+| UDP flood | Baseline | Pending | Pending | Pending | Pending | Pending |
+| UDP flood | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Added delay | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Added delay | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Packet loss | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Packet loss | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Agent stopped | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Agent stopped | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Link down | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Link down | Dynamic | Pending | Pending | Pending | Pending | Pending |
 
-#### Volumetric Flood Mitigation
-Under baseline operation, injecting a 50 Mbps UDP flood onto the 10 Mbps bottleneck completely saturated the switch buffer queues. Legitimate application traffic between `h1` and `h4` collapsed to $0.82\text{ Mbps}$, latency exploded from $13\text{ ms}$ to over $450\text{ ms}$, and packet loss reached $68.4\%$. Because the baseline controller performs no dynamic remediation, this degradation persisted indefinitely.  
-In dynamic mode, the correlator combined the surging port byte counters from `OFPPortStatsReply` with the soaring RTT reported by `h1`. Within $2.8\text{ seconds}$, the anomaly was classified as Quadrant I. The controller identified the offending flow and installed an `OFPFlowMod` drop rule matching the malicious source IP/port at Priority 100. Within $6.4\text{ seconds}$ total, the queue drained, restoring legitimate throughput to $8.91\text{ Mbps}$ and latency to $14.1\text{ ms}$.
+Detection time uses the unique verified fault-injection event timestamp and the first matching controller anomaly timestamp. The success event is appended only after injection verification, while its timestamp records when the fault effect was applied. Action latency is measured from that anomaly to the first action attributable to the same anomaly category and affected host; ambiguous or unrelated actions yield null.
 
-#### Cross-Layer Precision (Delay vs. Flood)
-When a 200 ms synthetic delay was injected on link `h1-eth0`, `h1`'s telemetry agent reported an immediate jump in `app_latency_ms` to $212.8\text{ ms}$. However, the OpenFlow port counters indicated normal, low-bandwidth utilization ($< 2\text{ Mbps}$). The correlator successfully categorized this as a non-congestion event (Quadrant II). In baseline mode, it was logged without action. In dynamic mode, the controller evaluated alternate topologies; since the physical link itself was artificially delayed, rerouting the flow through `s3` effectively bypassed the congested path where applicable, recovering round-trip times.
-
-#### Agent Crash vs. Node/Link Failure Disambiguation
-A critical failure mode in conventional SDN is distinguishing between an agent software failure and a physical link outage:
-- When the telemetry agent was terminated (`killagent`), telemetry heartbeats ceased. However, OpenFlow statistics indicated that data packets were still flowing across port 1 on `s1`. The controller accurately identified this as an **Agent Crash** (Quadrant III). Rather than disrupting working network flows, it raised an administrative alert and maintained the active forwarding state.
-- Conversely, when the `s1-s2` link was brought down, both telemetry packets and OpenFlow flow counter increments dropped to zero simultaneously. The controller identified this as a **Link/Host Failure** (Quadrant IV), immediately uninstalled stale flow entries, and rerouted traffic through `s3`.
+The runner records one ICMP echo per nominal one-second interval from the scenario's source host to its peer. RTT is reported in milliseconds. Probe packet loss is recorded per echo as 0% or 100%, so it is a coarse sample rather than a bulk-flow loss estimate. Throughput is independently calculated in Mbps from RX+TX byte-counter deltas on the probed host interface; it includes all host traffic and is not flow-specific goodput. Counter intervals use actual sample timestamps. Recovery time is the elapsed time from verified injection until two consecutive probe samples, during the fault or after clearing it, have zero loss and RTT no greater than `max(2 × baseline median RTT, baseline median RTT + 20 ms)`. Recovery remains null if valid baseline probes or independent confirmation are missing. The post-clear observation window is 30 seconds. Results must retain these method limits.
 
 ---
 
 ## 7. Conclusion
 
-This project successfully implemented and evaluated an integrated, closed-loop network monitoring architecture combining host-level UDP socket telemetry with OpenFlow 1.3 SDN control. Key conclusions from our implementation include:
+This project implements an integrated network monitoring architecture combining host-level UDP socket telemetry with OpenFlow 1.3 SDN control. Live evaluation has not yet been completed, so performance conclusions remain pending. The design goals are:
 1. **Cross-Layer Observability is Essential:** Network statistics alone cannot differentiate between legitimate bursty traffic and malicious congestion, nor can they reveal end-host resource exhaustion. Correlating application-layer RTT and error metrics with flow byte counters resolves operational ambiguity.
-2. **Sub-Second to Multi-Second Autonomic Remediation:** The prototype demonstrated autonomous anomaly detection within $2.8\text{ s}$ to $7.6\text{ s}$, and automated recovery within $6.4\text{ s}$ to $11.5\text{ s}$, restoring degraded bandwidth and packet loss back to nominal operating envelopes without human intervention.
-3. **Resilience Against False Positives:** By tracking sequence numbers and cross-referencing OpenFlow flow activity during telemetry loss, the controller prevented catastrophic misconfigurations, such as tearing down active flows when only a monitoring agent process terminated.
+2. **Autonomic Remediation:** Dynamic mode is intended to issue mitigation actions after detected anomalies. Detection and service recovery performance remain pending live measurement.
+3. **Resilience Against False Positives:** Dynamic agent-crash handling is designed to preserve forwarding state when telemetry stops but traffic counters remain active. This behavior has not yet been confirmed in a live evaluation.
 
 Future extensions could incorporate rolling exponential weighted moving averages (EWMA) with dynamic z-scores instead of static thresholds, and offload socket packet parsing directly to programmable data planes using P4 or eBPF.
 

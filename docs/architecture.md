@@ -55,7 +55,7 @@ This document specifies the end-to-end architectural design, module interfaces, 
                                                        | Correlates application stats with switch stats
                                                        v
    +-----------------------------------------------------------------------------------------------------------------+
-   | Cross-Layer Correlation & Anomaly Detection Engine (Evaluates every 2.0s)                                       |
+   | Cross-Layer Correlation & Anomaly Detection Engine (Evaluates every 5.0s)                                       |
    |   1. Computes delta byte rates (bps) from OpenFlow Port & Flow tables                                           |
    |   2. Retrieves latest host telemetry metrics (latency, error count, sequence continuity)                       |
    |   3. Compares metrics against multi-dimensional threshold matrix:                                               |
@@ -82,9 +82,9 @@ This document specifies the end-to-end architectural design, module interfaces, 
                                                        v
    +-----------------------------------------------------------------------------------------------------------------+
    | OpenFlow 1.3 Protocol & Switch Management Module                                                                |
-   |  - Periodic Statistics Poller (OFPPortStatsRequest, OFPFlowStatsRequest dispatched every 2.0s)                   |
-   |  - Reactive L2 MAC Learning & Flow Installation Engine (OFPPacketIn -> OFPFlowMod Priority 10)                  |
-   |  - Switch Topology Manager (s1 <-> s2 <-> s3 tracking, link status handling via OFPPortStatus)                  |
+   |  - Periodic Statistics Poller (OFPPortStatsRequest, OFPFlowStatsRequest dispatched every 5.0s)                   |
+   |  - Reactive L2 MAC Learning & Flow Installation Engine (OFPPacketIn -> OFPFlowMod Priority 1)                   |
+   |  - Fixed triangle switch map; no OFPPortStatus handler in current controller                                 |
    +---------------------------------------------------+-------------------------------------------------------------+
                                                        |
                                                        | OpenFlow 1.3 TCP Control Channel (Port 6653)
@@ -134,15 +134,15 @@ This document specifies the end-to-end architectural design, module interfaces, 
 - **NAT Node Integration:** A virtual NAT router (`10.0.0.254/8`) is attached to switch `s1`. It maps host namespace egress addressed to `10.0.0.254:9999` to the root system loopback interface, allowing host agents to deliver UDP packets to the Ryu controller without requiring an external physical network interface.
 
 ### 2.3 Ryu Controller Subsystems (`controller/`)
-- **UDP Collector Subsystem:** Binds to UDP port `9999` in a dedicated Ryu background greenlet/thread. Decodes inbound JSON payloads, updates host liveness records (`last_seen`), tracks sequence gaps (`seq_gap = seq - last_seq - 1`), and maintains moving averages of reported latencies and error rates.
-- **OpenFlow Statistics Poller:** Periodically emits asynchronous `OFPPortStatsRequest` and `OFPFlowStatsRequest` messages to all datapaths every $2.0\text{ s}$. Receives reply events, calculates delta byte counts, and computes per-port and per-flow transfer rates in bits per second (bps).
-- **Cross-Layer Correlator & Detector:** Synthesizes the host-side state table and switch-side OpenFlow statistics table. By mapping host MAC/IP addresses to switch ingress ports, it pairs application telemetry with the underlying forwarding infrastructure, executing the 4-quadrant anomaly classification matrix.
+- **UDP Collector Subsystem:** Binds to UDP port `9999` in a daemon thread. Decodes inbound JSON payloads, updates host liveness records (`last_seen`), and logs sequence gaps and out-of-order arrivals. Sequence gaps do not currently trigger the packet-loss classifier.
+- **OpenFlow Statistics Poller:** Periodically emits `OFPPortStatsRequest` and `OFPFlowStatsRequest` messages to connected datapaths on a five-second cycle. Receives reply events, calculates delta byte counts, and computes per-port and per-flow transfer rates in bits per second (bps).
+- **Cross-Layer Correlator & Detector:** Combines host telemetry with switch port/flow rates to detect congestion/flood, probe loss, host/app latency, missing-agent telemetry, and host/link inactivity. See the current implementation table in `docs/report.md`.
 - **Response & Mitigation Engine:**
   - *Baseline Mode:* Acts as a standard OpenFlow learning switch; detection alerts are logged to file, but no corrective flow entries are installed.
   - *Dynamic Mode:* Installs reactive, high-priority flow modifications (`OFPFlowMod`):
-    - **Drop Rule (Priority 100):** Drops malicious volumetric flood traffic based on IP 5-tuple.
-    - **Reroute Rule (Priority 50):** Diverts affected traffic around congested or degraded links to alternate paths (`s1 \to s3 \to s2`).
-    - **Flow Eviction:** Issues `OFPFC_DELETE` commands to wipe stale entries when a link goes down.
+    - **Drop Rule (Priority 200):** Drops traffic matching the selected source MAC for 30 seconds.
+    - **Reroute Rule (Priority 150):** Attempts alternate triangle paths for non-offending or host/link-down traffic, with a 60-second hard timeout.
+    - **Flow Eviction:** Deletes flows matching a host MAC after host/link-down classification.
 
 ---
 
@@ -165,7 +165,7 @@ This document specifies the end-to-end architectural design, module interfaces, 
        |
        | 6. recvfrom(4096)
        | 7. JSON decode & validate
-       | 8. Detect sequence gaps: if seq > last_seq + 1 -> increment dropped_packet_count
+       | 8. Log sequence gaps and out-of-order arrivals
        | 9. Commit to in-memory Host State Cache
 ```
 
@@ -173,7 +173,7 @@ This document specifies the end-to-end architectural design, module interfaces, 
 ```
 [Ryu Poller Greenlet (Hub)]
        |
-       | 1. Wakeup timer fires every 2.0s
+       | 1. Wakeup timer fires every 5.0s
        | 2. Emit OFPPortStatsRequest and OFPFlowStatsRequest to switches s1, s2, s3
        v
 [Open vSwitch Data Plane (s1, s2, s3)]
@@ -195,32 +195,33 @@ This document specifies the end-to-end architectural design, module interfaces, 
        | 1. Pull latest telemetry metrics from Host State Cache (RTT, errors, seq continuity)
        | 2. Pull latest switch port/flow bitrates from Switch State Cache
        | 3. Correlate host IP/MAC with switch ports and active flow rules
-       | 4. Apply Multi-Dimensional Detection Heuristics:
+       | 4. Apply the implemented telemetry and bitrate rules (see docs/report.md):
        |
-       +---> Case A: Latency > 100ms AND Port Bitrate > 8 Mbps (Congestion / Flood)
+       +---> Case A: Latency > 100ms AND host access-port bitrate > 8 Mbps (Congestion / Flood)
        |            |
        |            +--> Baseline Mode: Log [CONGESTION_ALERT] to disk
-       |            +--> Dynamic Mode:  Issue OFPFlowMod Priority 100 DROP on flood source;
-       |                                Issue OFPFlowMod Priority 50 REROUTE for victim flows
+       |            +--> Dynamic Mode:  Drop selected source MAC (priority 200);
+       |                                attempt detours for other traffic (priority 150)
        |
-       +---> Case B: Latency > 100ms AND Port Bitrate < 3 Mbps (Host / App Fault)
+       +---> Case B: Latency > 100ms AND host access-port bitrate <= 8 Mbps (Host / App Problem)
        |            |
-       |            +--> Baseline & Dynamic: Log [HOST_OVERLOAD_ALERT]; no network reroute
+       |            +--> Baseline & Dynamic: Log anomaly; no network reroute
        |
-       +---> Case C: Telemetry Silence > 5s AND Flow Counters > 0 (Agent Crash)
+       +---> Case C: No telemetry yet / silence > 5s AND Flow Counters > 0 (Agent Crash)
        |            |
-       |            +--> Baseline & Dynamic: Log [AGENT_DEAD_ALERT]; preserve active flow rules
+       |            +--> Baseline & Dynamic: Log anomaly; dynamic mode preserves active flow rules
        |
-       +---> Case D: Telemetry Silence > 5s AND Flow Counters == 0 (Link / Node Down)
+       +---> Case D: No telemetry yet / silence > 5s AND Flow Counters == 0 (Link / Node Down)
                     |
-                    +--> Baseline Mode: Log [LINK_DOWN_ALERT]; flows black-hole
-                    +--> Dynamic Mode:  Issue OFPFC_DELETE for stale flows;
-                                        Recalculate path via s3; install failover flow rules
+                    +--> Baseline Mode: Log anomaly
+                    +--> Dynamic Mode:  Delete host-MAC flows and attempt triangle detours
 ```
 
 ---
 
 ## 4. Sequence Diagram: Baseline vs. Dynamic Execution (ASCII)
+
+The following is a conceptual message flow, not an observed experiment. Numeric performance values and recovery claims are intentionally omitted. The current implementation details and limits are summarized in the report's detection table.
 
 ```
 Host Agent (h1)         Switch (s1)             UDP Collector          Correlator Engine       Response Engine
@@ -229,7 +230,7 @@ Host Agent (h1)         Switch (s1)             UDP Collector          Correlato
       |   (JSON to :9999)    |--- Forward via NAT --->|                        |                       |
       |                      |                        |--- Store Host Stat --->|                       |
       |                      |                        |                        |                       |
-      |                      |<-- OFPPortStatsReq ----| (every 2.0s)           |                       |
+      |                      |<-- OFPPortStatsReq ----| (every 5.0s)           |                       |
       |                      |--- OFPPortStatsReply ->|                        |                       |
       |                      |                        |--- Store Flow Stat --->|                       |
       |                      |                        |                        |                       |
@@ -237,10 +238,10 @@ Host Agent (h1)         Switch (s1)             UDP Collector          Correlato
                                   FAULT INJECTION: 50 Mbps UDP FLOOD OCCURS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       |                      |                        |                        |                       |
-      |-- Telemetry: RTT=450ms, Err=3 --------------->|                        |                       |
+      |-- Telemetry: high RTT / probe loss ---------->|                        |                       |
       |                      |                        |--- Update Latency ---->|                       |
       |                      |<-- OFPPortStatsReq ----|                        |                       |
-      |                      |-- OFPPortStatsReply -->| (Bitrate: 9.8 Mbps)    |                       |
+      |                      |-- OFPPortStatsReply -->|                        |                       |
       |                      |                        |--- Update Bitrate ---->|                       |
       |                      |                        |                        |                       |
       |                      |                        |                        |-- Correlate: ---------+
@@ -259,7 +260,7 @@ Host Agent (h1)         Switch (s1)             UDP Collector          Correlato
       |                      |                        |                        |                       |    s1-s2 port 3"
       |                      |                        |                        |                       |   (No FlowMod sent)
       |                      |                        |                        |                       |
-      | (Network remains congested; victim throughput stays collapsed at 0.8 Mbps; latency stays > 400ms)      |
+      | (No mitigation flow modifications are issued in baseline mode)                                         |
       |                      |                        |                        |                       |
 +==============================================================================================================+
 | BRANCH 2: DYNAMIC MODE                                                                                       |
@@ -269,22 +270,20 @@ Host Agent (h1)         Switch (s1)             UDP Collector          Correlato
       |                      |                        |                        |                       |   1. Drop flood
       |                      |                        |                        |                       |   2. Reroute victim
       |                      |                        |                        |                       |
-      |                      |<===================== OFPFlowMod (Priority 100) ========================|
-      |                      |                       [MATCH: dl_type=IP, nw_proto=UDP, nw_src=flooder] |
+      |                      |<===================== OFPFlowMod (Priority 200) ========================|
+      |                      |                       [MATCH: eth_src=selected host MAC]                |
       |                      |                       [ACTION: DROP]                                    |
       |                      |                                                                         |
-      |                      |<===================== OFPFlowMod (Priority 50) =========================|
-      |                      |                       [MATCH: in_port=1, nw_dst=h4]                     |
+      |                      |<===================== OFPFlowMod (Priority 150) ========================|
+      |                      |                       [MATCH: destination host MAC]                     |
       |                      |                       [ACTION: OUTPUT port 4 (s1->s3)]                  |
       |                      |                                                                         |
       |                      |-- Flood dropped; buffer empties; victim traffic traverses s1->s3->s2 ---|
       |                      |                        |                        |                       |
-      |-- Telemetry: RTT=14ms, Err=0 ---------------->|                        |                       |
+      |-- Later telemetry sample -------------------->|                        |                       |
       |                      |                        |--- Update Host Stat -->|                       |
-      |                      |                        |                        |-- Status: RECOVERED ->|
-      |                      |                        |                        |                       |-- Log Info:
-      |                      |                        |                        |                       |   "Recovery verified
-      |                      |                        |                        |                       |    TTR = 6.4s"
+      |                      |                        |                        |-- No recovery metric is   |
+      |                      |                        |                        |   emitted by current code |
 ```
 
 ---
@@ -293,4 +292,4 @@ Host Agent (h1)         Switch (s1)             UDP Collector          Correlato
 
 1. **Graceful Degraded Handling:** The UDP collector uses structured `try...except` parsing blocks to catch `json.JSONDecodeError` and `KeyError` exceptions, isolating corrupted payloads and preventing malicious or incomplete datagrams from crashing the controller.
 2. **Watchdog Timers:** To prevent persistent stale state during silent drops, every host entry in the telemetry store includes an epoch expiration watchdog timer ($5.0\text{ s}$). If the watchdog expires, the node transitions to an `UNRESPONSIVE` state, triggering Quadrant III or IV analysis.
-3. **Loop-Free Rerouting:** When calculating alternate paths (e.g., diverting `s1 \to s2` via `s1 \to s3 \to s2`), the controller enforces unidirectional, cycle-free flow tables with matched Priority 50 rules, preventing packet bouncing between triangle nodes.
+3. **Configured Alternate Paths:** The reroute helper uses the fixed triangle mapping and installs destination-MAC rules at priority 150. Live operation and loop behavior remain pending evaluation.

@@ -72,7 +72,7 @@ The architecture decouples telemetry generation, centralized cross-layer correla
                                                        | Correlates application stats with switch stats
                                                        v
    +-----------------------------------------------------------------------------------------------------------------+
-   | Cross-Layer Correlation & Anomaly Detection Engine (Evaluates every 2.0s)                                       |
+   | Cross-Layer Correlation & Anomaly Detection Engine (Evaluates every 5.0s)                                       |
    |   1. Computes delta byte rates (bps) from OpenFlow Port & Flow tables                                           |
    |   2. Retrieves latest host telemetry metrics (latency, error count, sequence continuity)                       |
    |   3. Compares metrics against multi-dimensional threshold matrix:                                               |
@@ -99,9 +99,9 @@ The architecture decouples telemetry generation, centralized cross-layer correla
                                                        v
    +-----------------------------------------------------------------------------------------------------------------+
    | OpenFlow 1.3 Protocol & Switch Management Module                                                                |
-   |  - Periodic Statistics Poller (OFPPortStatsRequest, OFPFlowStatsRequest dispatched every 2.0s)                   |
-   |  - Reactive L2 MAC Learning & Flow Installation Engine (OFPPacketIn -> OFPFlowMod Priority 10)                  |
-   |  - Switch Topology Manager (s1 <-> s2 <-> s3 tracking, link status handling via OFPPortStatus)                  |
+   |  - Periodic Statistics Poller (OFPPortStatsRequest, OFPFlowStatsRequest dispatched every 5.0s)                   |
+   |  - Reactive L2 MAC Learning & Flow Installation Engine (OFPPacketIn -> OFPFlowMod Priority 1)                   |
+   |  - Fixed triangle switch map; no OFPPortStatus handler in current controller                                 |
    +---------------------------------------------------+-------------------------------------------------------------+
                                                        |
                                                        | OpenFlow 1.3 TCP Control Channel (Port 6653)
@@ -146,8 +146,8 @@ The data plane emulates a 3-switch triangle loop with redundant paths:
 
 ## Prerequisites
 
-- **Operating System:** Ubuntu 20.04 / 22.04 LTS, Debian 11+, or the Mininet Pre-packaged VM.
-- **Python:** Python 3.8 or higher.
+- **Operating System:** Linux with Mininet and Open vSwitch installed. Arch Linux is supported when the required components are available.
+- **Python:** Use system Python for Mininet and a separate compatible Python environment for Ryu. Do not replace or downgrade system Python.
 - **Mininet:** Mininet 2.3.0+ (`openvswitch-switch` kernel datapath).
 - **SDN Controller Framework:** Ryu Framework (`ryu-manager`, supporting OpenFlow 1.3).
 - **Traffic Tools:** `iperf` (volumetric flood generation) and `iproute2` (`tc netem` for packet loss and latency injection).
@@ -157,11 +157,14 @@ The data plane emulates a 3-switch triangle loop with redundant paths:
 
 ## Installation Steps
 
-### 1. Update Packages & Install System Dependencies
+### 1. Install System Dependencies
 ```bash
+# Debian/Ubuntu example
 sudo apt update
 sudo apt install -y git python3 python3-pip mininet openvswitch-switch iperf iproute2 net-tools
 ```
+
+On Arch Linux, install Mininet, Open vSwitch, `iperf`, and `iproute2` with pacman. Check installed OVS service unit names with `systemctl list-unit-files '*openvswitch*'` before starting services; unit names vary by package version.
 
 ### 2. Clone the Repository
 ```bash
@@ -171,22 +174,20 @@ cd CN-Project
 
 ### 3. Install Python Dependencies
 ```bash
-pip3 install --upgrade pip
-pip3 install ryu psutil
+python3.10 -m venv .venv
+. .venv/bin/activate
+python -m pip install 'ryu==4.34' 'eventlet==0.33.3' psutil
 ```
 > [!NOTE]
-> If installing Ryu on newer versions of Python (3.10+), install `setuptools<58.0.0` or install inside a virtual environment to ensure proper compatibility with Ryu's eventlet dependencies.
+> Ryu 4.34 is an older framework and does not work with every current Python/Eventlet combination. Keep Mininet on system Python and use a project-local compatible Python for Ryu. The Arch environment audit in this repository documents the compatibility adjustments found here.
 
 ### 4. Verify Mininet & Ryu Installation
 ```bash
 # Verify Mininet can spin up OVS switches and run a sanity ping test
 sudo mn --test pingall
 
-# Clean up any leftover Mininet state
-sudo mn -c
-
-# Verify Ryu is installed and accessible in your PATH
-ryu-manager --version
+# Verify Ryu through the Python 3.10 compatibility launcher
+tools/run_ryu.sh --version
 ```
 
 ---
@@ -213,8 +214,8 @@ CN-Project/
 └── logs/
     ├── controller.log      # Ryu controller stdout/stderr and anomaly detection log
     ├── fault_events.log    # Timestamped record of fault injections and clears
-    ├── results_summary.json# Aggregated metrics table across all test runs
-    └── run_*.json          # Detailed per-scenario execution telemetry captures
+    ├── baseline/<run-id>/  # Baseline raw logs and JSON results (exclusive creation)
+    └── dynamic/<run-id>/   # Dynamic raw logs and JSON results (exclusive creation)
 ```
 
 ---
@@ -230,11 +231,17 @@ Open **Terminal 1** and launch the Ryu controller. Select either **`dynamic`** o
 cd ~/CN-Project
 
 # Run in Dynamic Mode (anomaly detection + autonomous mitigation):
-ryu-manager controller/sdn_controller.py --mode=dynamic
+tools/run_ryu.sh controller/sdn_controller.py --mode=dynamic
 
 # OR run in Baseline Mode (learning switch + logging only):
-# ryu-manager controller/sdn_controller.py --mode=baseline
+# tools/run_ryu.sh controller/sdn_controller.py --mode=baseline
 ```
+`tools/run_ryu.sh` defaults to `.venv/bin/python` and accepts an explicit
+`SDN_CONTROLLER_PYTHON` override. The live test runner independently verifies
+that this Python is 3.10 with Ryu imports available, then auto-detects a system
+Python that imports Mininet for topology execution. Override it with
+`--topology-python PATH` or `SDN_TOPOLOGY_PYTHON`; the runner passes that exact
+interpreter and its run-scoped environment through sudo.
 The controller initializes:
 - OpenFlow 1.3 listener on `127.0.0.1:6653`.
 - UDP telemetry collector thread listening on `0.0.0.0:9999`.
@@ -306,8 +313,10 @@ To cleanly exit the environment:
 ```bash
 mininet> agents stop
 mininet> exit
-sudo mn -c
 ```
+The topology calls `net.stop()` when its CLI exits. The automated runner waits for
+that process and, on timeout, signals only the process group it created. It does
+not run system-wide `mn -c` cleanup.
 
 ---
 
@@ -335,7 +344,7 @@ Hosts stream JSON-serialized UDP datagrams to `10.0.0.254:9999` at $1.0\text{-se
 | Field | Type | Description |
 |---|---|---|
 | `host_id` | String | Unique identifier of the transmitting host (`h1` through `h6`). |
-| `seq` | Integer | Monotonically increasing sequence number. Used by the controller to calculate packet loss and out-of-order delivery. |
+| `seq` | Integer | Monotonically increasing sequence number. The controller logs gaps and out-of-order arrivals; it does not currently classify loss from sequence gaps alone. |
 | `timestamp` | Float | Unix epoch timestamp ($1\text{ ms}$ precision) when the telemetry sample was collected. |
 | `metrics.app_latency_ms` | Float | Average round-trip time (RTT) measured over 5 UDP echo probes sent to the host's assigned peer. |
 | `metrics.req_per_sec` | Float | Effective successful probe transactions completed per second. |
@@ -347,14 +356,19 @@ Hosts stream JSON-serialized UDP datagrams to `10.0.0.254:9999` at $1.0\text{-se
 
 ## Cross-Layer Detection & Response Rules
 
-The correlation engine evaluates switch flow statistics and host telemetry against a four-quadrant decision matrix:
+The current controller applies these rules:
 
-| Quadrant | Application Telemetry | OpenFlow Switch Stats | Likely Condition | Controller Dynamic Response | Baseline Mode Behavior |
-|:---:|---|---|---|---|---|
-| **I** | Latency $> 100\text{ ms}$ or Error Count $\ge 3$ | Port Bitrate $> 8\text{ Mbps}$ (Link Saturated) | **Congestion or Volumetric Flood** | Install `OFPFlowMod` Priority 100 **DROP** rule on the offending source IP/port; install Priority 50 **REROUTE** rule for victim traffic via alternate switch. | Log alert only; victim traffic suffers high latency and dropped packets. |
-| **II** | Latency $> 100\text{ ms}$ or Error Count $\ge 3$ | Port Bitrate $< 3\text{ Mbps}$ (Link Underutilized) | **Host or Application Bottleneck** | Flag host as degraded; avoid unnecessary rerouting; log diagnostic alert to network operators. | Log alert only; standard switching continues. |
-| **III** | Telemetry Missing ($> 5\text{ s}$ silence) | Flow Counters Incrementing ($> 0\text{ bps}$) | **Agent Crash or UDP Loss** | Raise critical agent crash alert; keep existing forwarding flow rules intact to prevent service interruption. | Log alert only; forwarding remains unaffected. |
-| **IV** | Telemetry Missing ($> 5\text{ s}$ silence) | Flow Counters Inactive ($0\text{ bps}$) | **Host or Physical Link Down** | Evict stale flow entries via `OFPFC_DELETE`; recompute shortest path through triangle mesh (`s1-s3-s2`) and push failover rules. | Log alert only; packets forward into dead link (black hole). |
+| Telemetry / switch condition | Classification | Dynamic behavior | Baseline behavior |
+|---|---|---|---|
+| Latency >100 ms and host access-port bitrate >8 Mbps | Congestion/flood | Drop selected source MAC (priority 200, 30 s hard timeout) and attempt detours for non-offending traffic (priority 150, 60 s hard timeout) | Log anomaly |
+| Probe loss >=20% | Packet loss | Detection only; no reroute | Log anomaly |
+| Latency >100 ms and host access-port bitrate <=8 Mbps | Host/app problem | Log only | Log anomaly |
+| No telemetry record yet, or last telemetry >5 s ago, with active flow/port counters | Agent crash | Alert and preserve forwarding rules | Log anomaly |
+| No telemetry record yet, or last telemetry >5 s ago, with no active counters | Host/link down | Delete host-MAC-matching flows and attempt detours from the configured triangle map | Log anomaly |
+
+The controller does not currently classify packet loss from sequence gaps alone or handle `OFPPortStatus` events. See `docs/arch-evaluation.md` for evaluation status and limitations.
+
+At startup, a host with no telemetry record is treated as already missing (`elapsed=999s`), so host/link-down anomalies can be logged before agents first report. Interpret those startup events separately from faults injected after telemetry is established.
 
 ---
 
@@ -377,12 +391,14 @@ Custom Mininet CLI commands provided in `faults/faults.py`:
 
 ## Running Automated Tests
 
-The automated test runner (`faults/test_runner.py`) provides end-to-end benchmarking across all five fault scenarios in both **baseline** and **dynamic** modes.
+The automated test runner (`faults/test_runner.py`) evaluates the five fault scenarios, one controller mode per live invocation.
 
 ### Usage
 ```bash
-# Run all fault scenarios in both baseline and dynamic modes:
-sudo python3 faults/test_runner.py --mode both --outdir logs/
+# Start Ryu separately in the requested mode, then run one batch after approval:
+sudo python3 faults/test_runner.py --mode baseline --outdir logs/
+# Stop Ryu and start it in dynamic mode before the separate dynamic batch:
+sudo python3 faults/test_runner.py --mode dynamic --outdir logs/
 
 # Run only dynamic mode with a 30-second detection window:
 sudo python3 faults/test_runner.py --mode dynamic --detection-window 30
@@ -398,7 +414,7 @@ python3 faults/test_runner.py --dry-run
 
 | Flag | Default | Description |
 |---|---|---|
-| `--mode` | `both` | Controller mode to benchmark: `baseline`, `dynamic`, or `both`. |
+| `--mode` | `both` | Controller mode to benchmark. Live runs require one mode per invocation; restart Ryu before switching modes. |
 | `--outdir` | `logs/` | Output directory where JSON metrics and summaries will be written. |
 | `--detection-window` | `30` | Time window (in seconds) to observe telemetry and controller reaction. |
 | `--scenarios` | `all` | Comma-separated scenario identifiers (`flood`, `delay`, `loss`, `killagent`, `linkdown`) or `all`. |
@@ -413,32 +429,17 @@ For every scenario and mode, the test runner:
 2. Initializes the root NAT gateway and launches host telemetry agents.
 3. Injects the specified fault command into the interactive Mininet CLI.
 4. Waits for the configured detection window while continuously monitoring `controller.log`.
-5. Computes high-resolution **time-to-detect** ($\Delta t = t_{\text{detect}} - t_{\text{fault}}$) and **time-to-recover**.
-6. Clears the fault condition, terminates host agents, and tears down Mininet cleanly (`mn -c`).
-7. Serializes all metrics into `logs/run_<scenario>_<mode>_<timestamp>.json`.
-8. Generates an aggregated summary report in `logs/results_summary.json` and renders an aligned results table to stdout.
+5. Computes **time-to-detect** ($\Delta t = t_{\text{detect}} - t_{\text{fault}}$) using timestamped fault and controller log entries.
+6. Clears the scenario, stops only tracked agents/traffic processes, and tears down its own Mininet process group.
+7. Requires exactly one verified fault event and fresh switch connection events before counting the run.
+8. Records independent one-echo RTT/loss samples and aggregate host-interface byte-counter throughput samples. Recovery requires two consecutive healthy probes after injection against the run baseline, whether health returns during the fault or after clear.
+9. Writes JSON and raw files below a unique `logs/<mode>/<run-id>/` directory; files use exclusive creation.
 
-### Sample Test Runner Output Table
-```text
-========================================================================================================================================
-                                    AUTOMATED SDN TEST RESULTS SUMMARY
-========================================================================================================================================
-+----------------+----------+---------------------------+----------------------------------+----------------+-----------------+--------+
-| Fault Injected | Mode     | Expected Detection        | Actual Detection                 | Time to Detect | Time to Recover | Status |
-+----------------+----------+---------------------------+----------------------------------+----------------+-----------------+--------+
-| UDP flood      | baseline | Congestion or flood       | Congestion or flood detected ... | 1.82s          | N/A (baseline)  | PASS   |
-| Added delay    | baseline | Latency anomaly           | Latency anomaly detected on t... | 1.82s          | N/A (baseline)  | PASS   |
-| Packet loss    | baseline | Loss or missing telemetry | Loss or missing telemetry det... | 1.82s          | N/A (baseline)  | PASS   |
-| Agent killed   | baseline | Agent crash               | Agent crash detected on target   | 1.82s          | N/A (baseline)  | PASS   |
-| Link down      | baseline | Host or link down         | Host or link down detected on... | 1.82s          | N/A (baseline)  | PASS   |
-| UDP flood      | dynamic  | Congestion or flood       | Congestion or flood detected ... | 1.45s          | 2.30s           | PASS   |
-| Added delay    | dynamic  | Latency anomaly           | Latency anomaly detected on t... | 1.45s          | 2.30s           | PASS   |
-| Packet loss    | dynamic  | Loss or missing telemetry | Loss or missing telemetry det... | 1.45s          | 2.30s           | PASS   |
-| Agent killed   | dynamic  | Agent crash               | Agent crash detected on target   | 1.45s          | 2.30s           | PASS   |
-| Link down      | dynamic  | Host or link down         | Host or link down detected on... | 1.45s          | 2.30s           | PASS   |
-+----------------+----------+---------------------------+----------------------------------+----------------+-----------------+--------+
-Total Scenarios Run: 10 | Detected: 10/10
-```
+Before starting Mininet, the runner verifies the port-6653 listener PID, loaded controller script, script-derived controller log path, fresh startup timestamp, requested mode, and source-copy hashes. It then requires all three switch connection events. RTT and loss use one ICMP echo per nominal one-second interval; throughput is aggregate RX+TX bytes on the probed host interface, not a flow-specific iperf goodput measure. Recovery stays null unless its explicit probe threshold is restored for two consecutive samples.
+
+Fault success records are appended only after the requested effect is verified; their timestamp marks when the effect was applied. Cleanup emits `FAULT_CLEARED` only after qdiscs, links, and runner-tracked host processes pass their checks.
+
+Existing files in `logs/` include dry-run and synthetic output. Do not treat them as live evaluation results; see `docs/report.md` and `docs/slides.md` for pending metrics.
 
 ---
 

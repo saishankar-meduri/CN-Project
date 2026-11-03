@@ -95,7 +95,7 @@
 
 - **Transport Design Decisions:**
   - **UDP over TCP:** Avoids TCP connection handshake overhead, head-of-line blocking, and congestion backoff during network degradation.
-  - **Sequence Number Tracking (`seq`):** Enables controller to compute telemetry packet loss without transport-layer ACKs.
+  - **Sequence Number Tracking (`seq`):** Logs missing or out-of-order telemetry datagrams; sequence gaps do not currently classify probe packet loss.
 
 ---
 
@@ -170,19 +170,19 @@
   - `--mode dynamic`: Closed-loop mitigation; installs reactive OpenFlow 1.3 flow modifications.
 
 - **Mitigation Primitives:**
-  - **Offender Flow Suppression (Priority 100):**
+  - **Offender Flow Suppression (Priority 200):**
     ```python
-    match = parser.OFPMatch(eth_type=0x0800, ip_proto=17, ipv4_src=flooder_ip)
+    match = parser.OFPMatch(eth_src=offending_mac)
     actions = []  # Empty action list = HARD DROP
     inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
     ```
-  - **Dynamic Traffic Rerouting (Priority 50):**
+  - **Dynamic Traffic Rerouting (Priority 150):**
     ```python
-    match = parser.OFPMatch(eth_type=0x0800, ipv4_dst=victim_ip)
+    match = parser.OFPMatch(eth_dst=target_mac)
     actions = [parser.OFPActionOutput(port=alternate_path_port)]
     inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
     ```
-  - **Stale Rule Eviction:** Issues `OFPFC_DELETE` to purge unreachable paths on link down events.
+  - **Stale Rule Eviction:** Deletes flows matching a host MAC after host/link-down classification.
 
 ---
 
@@ -222,9 +222,8 @@
 
 ```
 Terminal 1 (SDN Controller):
-  $ ryu-manager controller/controller.py --dynamic
-  [INFO] Collector listening on 0.0.0.0:9999
-  [INFO] OpenFlow 1.3 switch connected: dpid=1, dpid=2, dpid=3
+  $ .venv/bin/python tools/ryu_manager.py controller/sdn_controller.py --mode=dynamic
+  [INFO] Confirm collector startup and switch connections in the actual controller log
 
 Terminal 2 (Mininet Network):
   $ sudo python3 topology/topo.py
@@ -236,67 +235,47 @@ Step 3: Trigger UDP Flood Fault
   mininet> fault flood h1 h4 25
 
 Step 4: Real-Time Controller Observability
-  [WARN] Quadrant I Anomaly: h1 RTT=452ms, s1-eth3 throughput=9.8 Mbps
-  [ACTION] Installing FlowMod: DROP UDP flood from 10.0.0.1 (Priority 100)
-  [ACTION] Installing FlowMod: REROUTE victim traffic h2->h5 via s3 (Priority 50)
-  [INFO] Telemetry recovered: h1 RTT=14.1ms, throughput=8.91 Mbps (TTR=6.4s)
+  [ANOMALY] Copy actual timestamped detection event from controller.log
+  [ACTION] Copy actual mitigation event, if emitted
+  [INFO] Service recovery measurement: pending independent traffic instrumentation
 ```
 
 ---
 
-# Slide 11: Experimental Results Table
+# Slide 11: Experimental Results (Pending)
 
-### Comprehensive Comparison: Baseline vs. Dynamic (5 Faults × 2 Modes)
+The pre-existing JSON output and the historical `logs/test_report.md` table are simulated planning material, not evidence from Mininet. An earlier baseline setup attempt on the old Arch kernel failed before fault injection; those setup-failure records are not measurements. Connectivity was later verified on kernel `7.2.14-arch1-1`, including NAT and all six hosts. Real baseline and dynamic fault-evaluation results remain pending; do not present legacy simulated values as experimental results.
 
-| Fault Injected | Mode | Expected Detection | Actual Detection | TTD | TTR | Victim Throughput | Latency (RTT) | Packet Loss |
-|---|---|---|---|---|---|---|---|---|
-| **UDP Flood** | Baseline | Congestion | Congestion Detected | 3.2s | N/A | 0.82 Mbps | 452.4 ms | 68.4% |
-| **UDP Flood** | Dynamic | Congestion | Congestion Mitigated | 2.8s | 6.4s | **8.91 Mbps** | **14.1 ms** | **0.4%** |
-| **Added Delay (200ms)** | Baseline | Latency Anomaly | Latency Anomaly | 4.2s | N/A | 9.38 Mbps | 212.8 ms | 0.0% |
-| **Added Delay (200ms)** | Dynamic | Latency Anomaly | Path Rerouted | 3.8s | 8.2s | 9.42 Mbps | **24.6 ms** | 0.0% |
-| **Packet Loss (30%)** | Baseline | Packet Loss | Loss Anomaly | 5.4s | N/A | 2.14 Mbps | 48.2 ms | 31.2% |
-| **Packet Loss (30%)** | Dynamic | Packet Loss | Rerouted via s3 | 4.6s | 7.8s | **9.22 Mbps** | **16.3 ms** | **0.8%** |
-| **Agent Killed** | Baseline | Agent Crash | Timeout (5s) | 6.2s | N/A | 9.45 Mbps | 13.8 ms | 0.0% |
-| **Agent Killed** | Dynamic | Agent Crash | Flows Preserved | 5.9s | 6.1s | 9.46 Mbps | 13.7 ms | 0.0% |
-| **Link Down (s1-s2)** | Baseline | Link Down | Flow Stagnation | 8.2s | N/A | 0.00 Mbps | $\infty$ | 100.0% |
-| **Link Down (s1-s2)** | Dynamic | Link Down | Rerouted s1-s3-s2 | 7.6s | 11.5s | **8.78 Mbps** | **18.9 ms** | **1.2%** |
+| Fault Injected | Mode | Detection time | Recovery time | Throughput | RTT | Packet loss |
+|---|---|---|---|---|---|---|
+| UDP flood | Baseline | Pending | Pending | Pending | Pending | Pending |
+| UDP flood | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Added delay | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Added delay | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Packet loss | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Packet loss | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Agent stopped | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Agent stopped | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Link down | Baseline | Pending | Pending | Pending | Pending | Pending |
+| Link down | Dynamic | Pending | Pending | Pending | Pending | Pending |
 
 ---
 
-# Slide 12: Performance Analysis & Discussion
+# Slide 12: Measurement Method and Status
 
-### Key Findings & Insights
-
-- **Volumetric Flood Recovery:**
-  - Baseline mode suffers **91.8% throughput collapse** and **450ms+ latency**.
-  - Dynamic mode identifies the 5-tuple, drops malicious packets at the ingress port, and recovers throughput to **8.91 Mbps in 6.4 seconds**.
-
-- **Cross-Layer Disambiguation:**
-  - High Latency + Low Bandwidth $\rightarrow$ Application/Host problem $\rightarrow$ Prevents unnecessary rerouting loops.
-  - Missing Telemetry + Active Flow Counters $\rightarrow$ Host agent died $\rightarrow$ Avoids tearing down functioning user connections.
-
-- **Rapid Failover on Link Severance:**
-  - When `s1-s2` is brought down, dynamic mode detects port down status combined with telemetry disruption in **7.6s**, flushing stale rules and rerouting over `s1-s3-s2` in **11.5s**, restoring connectivity.
+- Detection time: fault injection timestamp to the matching controller anomaly timestamp.
+- Recovery time: measured only after two consecutive post-injection ICMP probes meet the run-relative RTT/loss threshold, during the fault or after clear; controller action latency is not recovery time.
+- RTT and probe loss: one ICMP echo per nominal one-second sample (loss is coarse 0%/100% per echo).
+- Throughput: RX+TX byte-counter rate on the probed host interface, aggregate rather than flow-specific goodput.
+- The implementation records these independent measurements, but performance claims still require approved live Mininet and Ryu fault-evaluation runs.
 
 ---
 
 # Slide 13: Performance Graphs (Description)
 
-### What the Visualizations Illustrate
+### What the Visualizations Will Show
 
-- **Graph 1: Application Latency (RTT) Over Time**
-  - *X-axis:* Time (0 to 60 seconds). *Y-axis:* Latency (ms).
-  - *Baseline curve:* Surges from 14ms to 452ms at $t=15\text{s}$ (fault injection) and stays pinned at 450ms indefinitely.
-  - *Dynamic curve:* Spikes briefly to 450ms between $t=15\text{s}$ and $t=18\text{s}$; drops sharply back to 14.1ms at $t=21.4\text{s}$ after FlowMod installation.
-
-- **Graph 2: Legitimate Victim Throughput (Mbps)**
-  - *X-axis:* Time (0 to 60 seconds). *Y-axis:* Bandwidth (Mbps).
-  - *Baseline curve:* Drops from 9.2 Mbps to 0.82 Mbps during the flood and remains depressed.
-  - *Dynamic curve:* Drops during the flood, then rebounds to 8.91 Mbps within 6.4 seconds of injection.
-
-- **Graph 3: Anomaly Detection Time (TTD) Comparison**
-  - Bar chart comparing detection latency across all 5 fault types (range: 2.8s to 7.6s).
-  - Illustrates that telemetry sequence gaps and active probe timeouts provide much faster warning signals than standard OpenFlow poll intervals.
+Plots are pending live measurements. Once collected, graph time-series RTT and throughput for baseline/dynamic runs and compare measured detection times across the five fault scenarios. Do not draw curves from the legacy synthetic JSON files.
 
 ---
 
@@ -305,13 +284,13 @@ Step 4: Real-Time Controller Observability
 ### Contributions & Engineering Takeaways
 
 - **Holistic Network Observability:**
-  - Demonstrated that combining push-based host socket telemetry with pull-based SDN switch counters provides true full-stack network intelligence.
+  - The design combines push-based host socket telemetry with polled SDN switch counters for cross-layer monitoring.
 
 - **Autonomous Closed-Loop Control:**
-  - Replaced manual network incident diagnosis with automated detection (2–8s) and programmatic OpenFlow mitigation (5–15s).
+  - Dynamic detection and mitigation are implemented; live performance measurements are pending.
 
 - **High Reliability & Resilience:**
-  - Validated across 5 distinct failure scenarios with zero false-positive route churn during agent crashes.
+  - Evaluation across the five fault scenarios is pending live Mininet runs.
 
 - **Future Work:**
   - Machine learning classification (k-means / isolation forests) for multivariate telemetry.
@@ -324,12 +303,12 @@ Step 4: Real-Time Controller Observability
 ### Anticipated Questions & Technical Justifications
 
 - **Q1: Why use UDP instead of TCP for host telemetry?**
-  *Ans:* UDP does not incur 3-way handshake delays, TLS negotiation overhead, or TCP retransmission storms during severe network congestion. Monotonic sequence numbers in the JSON payload detect packet drops directly.
+  *Ans:* UDP avoids connection setup and transport retransmission. The collector logs telemetry sequence gaps and out-of-order arrivals, but gaps do not currently classify packet loss.
 
 - **Q2: Does telemetry traffic contribute to link congestion?**
   *Ans:* Each JSON payload is ~180 bytes sent at 1 Hz. Across 6 hosts, telemetry generates ~1.08 KB/s (< 0.01% of the 10 Mbps link capacity). Furthermore, NAT routes telemetry directly out-of-band to the controller machine.
 
 - **Q3: How does the controller prevent forwarding loops during rerouting?**
-  *Ans:* The controller enforces strict OpenFlow rule priorities (Priority 50 for rerouted paths, Priority 10 for default paths) and calculates loop-free acyclic directed paths across the triangle mesh.
+  *Ans:* The controller uses priority 150 for reroute rules and priority 1 for ordinary learned forwarding rules. Its configured triangle detours are source-level behavior; loop behavior has not yet been verified in a live run.
 
 **Thank you! Any questions?**
