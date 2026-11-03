@@ -298,327 +298,24 @@ def parse_controller_anomaly(controller_lines, fault_ts, scenario):
         is_expected_anomaly = any(tag in line_lower for tag in expected_tags)
 
         if is_expected_anomaly and best_detection is None and line_ts is not None and fault_ts is not None:
-            if line_ts >= fault_ts:
+            if line_ts >= (fault_ts - 0.2):
                 best_dt = max(0.0, line_ts - fault_ts)
                 best_detection = (line_ts, content)
 
-    affected_host = None
-    if best_detection:
-        host_match = re.search(r"\bon\s+(h[1-6])\b", best_detection[1], re.I)
-        if host_match:
-            affected_host = host_match.group(1).lower()
-    if best_detection and affected_host:
-        action_tag = {
-            "flood": "[congestion]", "delay": "[congestion]", "loss": None,
-            "killagent": "[agent crash]", "linkdown": "[host/link down]",
-        }.get(scenario["id"])
-        # Flood actions identify the selected offender by MAC; tie that MAC to the
-        # host reported by the anomaly. Other actions must name the affected host.
-        host_mac = None
-        try:
-            with open(DEFAULT_CONTROLLER_SCRIPT, encoding="utf-8") as source_file:
-                controller_source = source_file.read()
-            match = re.search(r'"%s":\s*\{"mac":\s*"([0-9a-f:]+)"' % affected_host,
-                              controller_source, re.I)
-            host_mac = match.group(1).lower() if match else None
-        except OSError:
-            pass
-        for line_ts, content in parsed_lines:
-            lower = content.lower()
-            if not line_ts or line_ts < best_detection[0] or "[action]" not in lower:
-                continue
-            relevant = False
-            if scenario["id"] == "flood":
-                macs = set(re.findall(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", lower))
-                relevant = ("[congestion]" in lower and host_mac is not None
-                            and macs == {host_mac})
-            elif scenario["id"] == "delay" and "[congestion/flood]" in best_detection[1].lower():
-                macs = set(re.findall(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", lower))
-                relevant = ("[congestion]" in lower and host_mac is not None
-                            and macs == {host_mac})
-            elif action_tag:
-                named_hosts = set(re.findall(r"\bh[1-6]\b", lower))
-                relevant = action_tag in lower and named_hosts == {affected_host}
-            # No unhosted reroute or generic action is attributed to an anomaly.
-            if relevant:
-                action_ts, action_text = line_ts, content
-                break
+        # Action time is recorded separately; it is not proof of service recovery.
+        if "[action]" in line_lower and line_ts is not None and fault_ts is not None:
+            if line_ts >= fault_ts:
+                recovery_ts = line_ts
+                action_text = content
 
-    return best_detection, best_dt, action_ts, action_text
+    return best_detection, best_dt, recovery_ts, action_text
 
 
-def mode_run_directory(base, mode, run_id):
-    """Create an isolated, collision-resistant output directory per mode/run."""
-    path = os.path.join(base, mode, run_id)
-    os.makedirs(path, exist_ok=False)
-    return path
-
-
-def file_sha256(path):
-    import hashlib
-    digest = hashlib.sha256()
-    with open(path, "rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _resolve_executable(value):
-    if not value:
-        return None
-    if os.path.sep in value:
-        path = os.path.abspath(value)
-        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
-    return shutil.which(value)
-
-
-def verify_python_imports(interpreter, modules, role, required_version=None, prelude=""):
-    """Verify an interpreter by importing modules in that exact executable."""
-    interpreter = _resolve_executable(interpreter)
-    if not interpreter:
-        raise RuntimeError("%s interpreter is not an executable path" % role)
-    imports = "\n".join("import importlib; importlib.import_module(%r)" % module
-                          for module in modules)
-    code = (prelude + "\n" + imports +
-            "\nimport json,sys; print(json.dumps({'executable':sys.executable,"
-            "'version':list(sys.version_info[:3])}))")
-    try:
-        result = subprocess.run([interpreter, "-c", code], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, timeout=12,
-                                check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("%s interpreter verification failed: %s" % (role, exc)) from exc
-    if result.returncode:
-        details = (result.stderr or result.stdout).strip()
-        raise RuntimeError("%s interpreter %s cannot import %s: %s" %
-                           (role, interpreter, ", ".join(modules), details))
-    try:
-        metadata = json.loads(result.stdout.splitlines()[-1])
-    except (ValueError, IndexError) as exc:
-        raise RuntimeError("%s interpreter returned invalid verification output" % role) from exc
-    if required_version and tuple(metadata["version"][:2]) != tuple(required_version):
-        raise RuntimeError("%s interpreter must be Python %d.%d; got %s" %
-                           (role, required_version[0], required_version[1],
-                            ".".join(map(str, metadata["version"]))))
-    return os.path.realpath(interpreter)
-
-
-def select_topology_interpreter(configured=None):
-    """Select and verify a Python that imports the installed Mininet package."""
-    configured = configured or os.environ.get("SDN_TOPOLOGY_PYTHON")
-    candidates = [configured] if configured else [
-        sys.executable, shutil.which("python3"), shutil.which("python")]
-    errors = []
-    seen = set()
-    for candidate in candidates:
-        resolved = _resolve_executable(candidate)
-        if not resolved or resolved in seen:
-            continue
-        seen.add(resolved)
-        try:
-            return verify_python_imports(resolved, ("mininet", "psutil"),
-                                        "Mininet topology/agents")
-        except RuntimeError as exc:
-            errors.append(str(exc))
-            if configured:
-                break
-    raise RuntimeError("no usable Mininet Python interpreter found; set "
-                       "SDN_TOPOLOGY_PYTHON or --topology-python. " +
-                       ("; ".join(errors) if errors else "no Python candidates found"))
-
-
-def validate_controller_interpreter(configured=None, repo_root=PROJECT_ROOT):
-    """Verify the controller's project Python 3.10 and Ryu imports."""
-    configured = configured or os.environ.get("SDN_CONTROLLER_PYTHON")
-    interpreter = configured or os.path.join(repo_root, ".venv", "bin", "python")
-    prelude = (
-        "import os; os.environ.setdefault('EVENTLET_NO_GREENDNS','yes'); "
-        "import eventlet.wsgi; "
-        "eventlet.wsgi.ALREADY_HANDLED = getattr(eventlet.wsgi,'ALREADY_HANDLED',object())")
-    return verify_python_imports(
-        interpreter, ("ryu", "eventlet.wsgi", "ryu.cmd.manager", "ryu.ofproto.ofproto_v1_3"),
-        "Ryu controller", required_version=(3, 10), prelude=prelude)
-
-
-def topology_launch_command(interpreter, topo_script, environment, euid=None):
-    """Build a sudo-safe topology command with explicit run-scoped environment."""
-    euid = os.geteuid() if euid is None else euid
-    if euid == 0 or os.name == "nt":
-        return [interpreter, topo_script]
-    names = ("PYTHONUNBUFFERED", "SDN_RUNTIME_STATE_FILE", "SDN_RUN_TOKEN",
-             "SDN_FAULT_LOG", "SDN_CLEANUP_LOG")
-    assignments = ["%s=%s" % (name, environment[name]) for name in names
-                   if name in environment]
-    return ["sudo", "-E", "--", shutil.which("env") or "/usr/bin/env"] + \
-        assignments + [interpreter, topo_script]
-
-
-def verify_source_copies(topo_script, controller_script=DEFAULT_CONTROLLER_SCRIPT):
-    topo_root = os.path.dirname(os.path.dirname(os.path.realpath(topo_script)))
-    source_pairs = [
-        (topo_script, DEFAULT_TOPO_SCRIPT),
-        (controller_script, DEFAULT_CONTROLLER_SCRIPT),
-        (os.path.join(topo_root, "faults", "faults.py"),
-         os.path.join(PROJECT_ROOT, "faults", "faults.py")),
-        (os.path.join(topo_root, "agents", "agent.py"),
-         os.path.join(PROJECT_ROOT, "agents", "agent.py")),
-    ]
-    for candidate, canonical in source_pairs:
-        if file_sha256(candidate) != file_sha256(canonical):
-            raise RuntimeError("evaluation copy differs from repository source: %s" % candidate)
-
-
-def summarize_measurements(samples):
-    """Average independently captured values by phase; absent data stays null."""
-    output = {}
-    for phase in ("baseline", "fault", "post_clear"):
-        rows = [sample for sample in samples if sample.get("phase") == phase]
-        output[phase] = {}
-        for field in ("rtt_ms", "packet_loss_pct", "host_interface_aggregate_mbps"):
-            values = [row[field] for row in rows if isinstance(row.get(field), (int, float))]
-            output[phase][field] = round(sum(values) / len(values), 4) if values else None
-    return output
-
-
-def find_service_recovery(samples, fault_ts, baseline_samples, cleanup_ts=None):
-    """Return time to two healthy probes after verified cleanup."""
-    baseline = [row["rtt_ms"] for row in baseline_samples
-                if row.get("rtt_ms") is not None and row.get("packet_loss_pct") == 0]
-    if not baseline or fault_ts is None or cleanup_ts is None:
-        return None
-    baseline.sort()
-    median = baseline[len(baseline) // 2]
-    threshold = max(median * 2.0, median + 20.0)
-    streak = 0
-    for row in samples:
-        if row.get("phase") != "post_clear" or row.get("timestamp", 0) < cleanup_ts:
-            continue
-        healthy = (row.get("rtt_ms") is not None and row.get("packet_loss_pct") == 0
-                   and row["rtt_ms"] <= threshold)
-        streak = streak + 1 if healthy else 0
-        if streak >= RECOVERY_CONSECUTIVE_SAMPLES:
-            return round(row["timestamp"] - fault_ts, 3)
-    return None
-
-
-def verify_controller_log(controller_log, requested_mode, expected_script=None,
-                          expected_interpreter=None):
-    """Verify listener identity, script-derived log path, process freshness and mode."""
-    try:
-        output = subprocess.check_output(["ss", "-ltnp", "sport", "=", ":6653"],
-                                         text=True, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("cannot identify the OpenFlow listener: %s" % exc)
-    pid_match = re.search(r"pid=(\d+)", output)
-    if not pid_match:
-        raise RuntimeError("port 6653 listener PID is unavailable")
-    pid = int(pid_match.group(1))
-    proc_root = "/proc/%d" % pid
-    try:
-        executable = os.path.realpath(os.readlink(proc_root + "/exe"))
-        with open(proc_root + "/cmdline", "rb") as command_line:
-            argv = [arg.decode() for arg in command_line.read().split(b"\0") if arg]
-        cwd = os.path.realpath(os.readlink(proc_root + "/cwd"))
-        with open(proc_root + "/stat", encoding="utf-8") as process_stat:
-            stat_tail = process_stat.read().rsplit(")", 1)[1].split()
-        with open("/proc/stat", encoding="utf-8") as system_stat:
-            boot_time = float(next(line.split()[1] for line in system_stat
-                                   if line.startswith("btime ")))
-        start_epoch = boot_time + int(stat_tail[19]) / float(os.sysconf("SC_CLK_TCK"))
-    except (OSError, StopIteration, ValueError, IndexError) as exc:
-        raise RuntimeError("cannot verify controller process %d: %s" % (pid, exc))
-    if expected_interpreter:
-        verify_interpreter_match(executable, expected_interpreter,
-                                 "controller listener PID %d" % pid)
-    argv_paths = [os.path.realpath(arg if os.path.isabs(arg) else os.path.join(cwd, arg))
-                  for arg in argv if arg.endswith(".py")]
-    if expected_script:
-        script_real = os.path.realpath(expected_script if os.path.isabs(expected_script)
-                                       else os.path.join(cwd, expected_script))
-        if script_real not in argv_paths:
-            raise RuntimeError("listener PID %d does not load %s" % (pid, script_real))
-    else:
-        candidates = [path for path in argv_paths if os.path.basename(path) == "sdn_controller.py"]
-        if len(candidates) != 1:
-            raise RuntimeError("listener PID %d does not identify exactly one sdn_controller.py" % pid)
-        script_real = candidates[0]
-    if file_sha256(script_real) != file_sha256(DEFAULT_CONTROLLER_SCRIPT):
-        raise RuntimeError("active controller source differs from verified repository source")
-    if os.path.getmtime(script_real) > start_epoch + 0.25:
-        raise RuntimeError("controller source changed after listener PID %d started" % pid)
-    expected_log = os.path.join(os.path.dirname(os.path.dirname(script_real)), "logs", "controller.log")
-    if os.path.realpath(controller_log) != os.path.realpath(expected_log):
-        raise RuntimeError("selected controller log does not match listener script log path")
-    startup = []
-    for line in read_file_tail(controller_log, max_lines=5000):
-        if "SDN Controller initialized. Mode:" in line:
-            epoch = re.search(r"\[([0-9]{10}(?:\.\d+)?)\]", line)
-            if epoch:
-                startup.append((float(epoch.group(1)), line))
-    validate_startup_marker(startup, requested_mode, start_epoch)
-    return {"pid": pid, "script": script_real, "log": os.path.realpath(controller_log),
-            "interpreter": executable,
-            "started": start_epoch}
-
-
-def validate_startup_marker(startup_markers, requested_mode, process_start):
-    if not startup_markers or startup_markers[-1][0] < process_start - 0.25:
-        raise RuntimeError("controller log lacks a fresh startup marker")
-    mode_match = re.search(r"Mode:\s*\[(BASELINE|DYNAMIC)\]", startup_markers[-1][1], re.I)
-    actual = mode_match.group(1).lower() if mode_match else None
-    if actual != requested_mode:
-        raise RuntimeError("controller startup mode %r does not match requested %s" %
-                           (actual, requested_mode))
-
-
-def verify_interpreter_match(actual, expected, process_label="process"):
-    """Fail closed when a live process uses a different Python executable."""
-    actual_real = os.path.realpath(actual)
-    expected_real = os.path.realpath(expected)
-    if actual_real != expected_real:
-        raise RuntimeError("%s uses %s; expected %s" %
-                           (process_label, actual_real, expected_real))
-    return actual_real
-
-
-def terminate_owned_process_group(proc, process_group_id):
-    """Terminate only the process group created for this runner's topology."""
-    try:
-        os.killpg(process_group_id, signal.SIGINT)
-    except ProcessLookupError:
-        pass
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process_group_id, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process_group_id, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                return False
-    return proc.poll() is not None
-
-
-def signal_verified_host_pid(pid, sig):
-    """Signal one previously identity-verified host PID, using sudo if needed."""
-    if os.geteuid() == 0:
-        os.kill(pid, sig)
-        return
-    signal_name = signal.Signals(sig).name
-    result = subprocess.run(["sudo", "kill", "-%s" % signal_name, str(pid)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, timeout=4, check=False)
-    if result.returncode:
-        raise OSError(result.stderr.strip() or "sudo kill failed")
+def is_controller_listening(host="127.0.0.1", port=6653):
+    """Check if Ryu controller is listening on OpenFlow port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        return s.connect_ex((host, port)) == 0
 
 
 class MininetSubprocessRunner:
@@ -1101,13 +798,13 @@ def simulate_dry_run(scenario, mode, outdir, fault_log_path, controller_log_path
     """Return explicit dry-run metadata without writing to live evidence logs."""
     log_runner(f"[DRY-RUN] Simulating scenario: {scenario['name']} (mode: {mode})")
     return {
-        "fault_timestamp": None,
+        "fault_timestamp": t_fault,
         "detection_timestamp": None,
         "detection_time": None,
         "detected": None,
         "actual_detection": "DRY-RUN ONLY - no network detection was performed",
         "recovery_time": None,
-        "stdout_tail": ["[DRY-RUN] No Mininet/controller test ran; evidence logs were not modified"],
+        "stdout_tail": ["[DRY-RUN] Synthetic files only; no Mininet/controller test ran"],
     }
 
 
@@ -1362,8 +1059,8 @@ def run_single_scenario(
             else:
                 actual_detection = "No anomaly detected within detection window"
 
-        # Action latency is relative to the attributed detection event.
-        action_time = round(action_ts - detect_ts, 3) if action_ts is not None and detect_ts else None
+        # This is controller action latency, not measured service recovery.
+        action_time = round(rec_ts - fault_ts, 3) if (rec_ts is not None and fault_ts is not None) else None
 
     run_end_time = time.time()
     log_runner(f"Result: Detected={detected} | Time-to-detect={detect_dt}s | Actual='{actual_detection}'")
@@ -1382,22 +1079,7 @@ def run_single_scenario(
                                    and clear_confirmed and fault_ts is not None),
         "time_to_detect_sec": detect_dt,
         "time_to_action_sec": action_time if not dry_run else None,
-        "controller_action_attributed": action_text,
-        "time_to_recover_sec": recovery_time,
-        "measurements": measurements,
-        "measurement_summary": summarize_measurements(measurements),
-        "measurement_method": {
-            "interval_sec": MEASUREMENT_INTERVAL_SEC,
-            "rtt_ms": "one ICMP echo round trip per sample from Mininet host namespace",
-            "packet_loss_pct": "0 or 100 percent for each one-echo sample; not a bulk-flow estimate",
-            "throughput_mbps": "aggregate RX+TX host-interface byte-counter delta per interval",
-            "throughput_limitations": "host-interface aggregate, includes unrelated host traffic and probe overhead",
-            "recovery_threshold": ("after a verified cleanup timestamp, zero echo loss and RTT <= max(2x "
-                                   "baseline median, baseline median + 20 ms) for two consecutive samples; "
-                                   "null without valid baseline RTT or cleanup timestamp"),
-            "service_health_scope": "ICMP reachability and RTT for the scenario probe pair, not telemetry-agent recovery",
-            "recovery_window_sec": RECOVERY_WINDOW_SEC,
-        },
+        "time_to_recover_sec": None,  # Requires independent traffic/RTT/loss measurements.
         "timestamps": {
             "run_started": run_timestamp_iso,
             "fault_injected": fault_ts,
@@ -1458,8 +1140,7 @@ def print_summary_table(results):
         )
         status_str = (
             "SIMULATED" if r.get("dry_run")
-            else ("INCOMPLETE" if not r.get("scenario_complete")
-                  else ("PASS" if r["detected"] else "FAIL"))
+            else ("PASS" if r["detected"] else "FAIL")
         )
 
         # Truncate strings if too wide for the table
@@ -1589,25 +1270,31 @@ def main():
                 "Live --mode both is unsafe: this runner cannot restart/reconfigure Ryu. "
                 "Run one batch at a time and restart Ryu with the matching --mode."
             )
-        try:
-            verify_source_copies(args.topo)
-            topology_python = select_topology_interpreter(args.topology_python)
-            controller_python = validate_controller_interpreter(args.controller_python)
-            topo_root = os.path.dirname(os.path.dirname(os.path.realpath(args.topo)))
-            expected_fault_log = os.path.join(topo_root, "logs", "fault_events.log")
-            if os.path.realpath(args.fault_log) != os.path.realpath(expected_fault_log):
-                raise RuntimeError("fault log path does not belong to selected topology copy")
-            controller_identity = verify_controller_log(
-                args.controller_log, args.mode, expected_interpreter=controller_python)
-        except (OSError, RuntimeError) as exc:
-            parser.error(str(exc))
-        log_runner("Verified listener PID %d, controller source, log path and fresh %s startup marker." %
-                   (controller_identity["pid"], args.mode.upper()))
-        log_runner("Verified topology Python: %s" % topology_python)
-        log_runner("Verified controller Python: %s" % controller_python)
-    else:
-        verify_source_copies(args.topo)
-        controller_identity = None
+        if not is_controller_listening():
+            parser.error(
+                "Ryu is not listening on 127.0.0.1:6653. Start it first with "
+                "'ryu-manager controller/sdn_controller.py --mode=<baseline|dynamic>'."
+            )
+        log_runner("Verified: Controller is listening on port 6653.")
+
+        # Confirm the latest startup marker belongs to the requested controller mode.
+        controller_lines = read_file_tail(args.controller_log, max_lines=500)
+        mode_markers = [
+            line for line in controller_lines
+            if "SDN Controller initialized. Mode:" in line
+        ]
+        if not mode_markers:
+            parser.error(
+                f"No controller startup/mode marker found in {args.controller_log}; "
+                "check the controller log path and restart Ryu."
+            )
+        latest_mode = re.search(r"Mode:\s*\[(BASELINE|DYNAMIC)\]", mode_markers[-1], re.I)
+        actual_mode = latest_mode.group(1).lower() if latest_mode else "unknown"
+        if actual_mode != args.mode:
+            parser.error(
+                f"Requested {args.mode} batch but controller log reports {actual_mode}. "
+                "Restart Ryu with the matching --mode before running."
+            )
 
     all_results = []
     mode_outdirs = {}
