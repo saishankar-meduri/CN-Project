@@ -472,7 +472,8 @@ def run_single_scenario(
             detect_dt = None
             actual_detection = "No anomaly detected within window"
 
-        recovery_time = round(rec_ts - fault_ts, 3) if (rec_ts and fault_ts) else None
+        # This is controller action latency, not measured service recovery.
+        action_time = round(rec_ts - fault_ts, 3) if (rec_ts is not None and fault_ts is not None) else None
 
     run_end_time = time.time()
     log_runner(f"Result: Detected={detected} | Time-to-detect={detect_dt}s | Actual='{actual_detection}'")
