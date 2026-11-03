@@ -776,14 +776,9 @@ class SDNController(app_manager.RyuApp):
                 if match_dict.get("eth_src") == mac or match_dict.get("eth_dst") == mac:
                     return True
 
-        # 3. Check raw packet counters in flow stats
-        dp_flows = self.flow_stats.get(dpid, {}).get("flows", [])
-        for f in dp_flows:
-            match_dict = dict(f["match"].items())
-            if match_dict.get("eth_src") == mac or match_dict.get("eth_dst") == mac:
-                if f["packet_count"] > 0:
-                    return True
-
+        # Do not treat cumulative packet_count > 0 as live traffic: counters remain
+        # non-zero after an agent dies and would misclassify stale flows as active.
+        # The rate-based checks above use deltas from successive stats replies.
         return False
 
     def _get_host_throughput(self, mac: str, dpid: int, port: int) -> float:
