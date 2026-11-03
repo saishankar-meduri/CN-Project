@@ -1,0 +1,461 @@
+{
+  "generated_at": "2026-10-14T02:25:37.831826",
+  "total_runs": 10,
+  "passed_detections": 10,
+  "modes_tested": [
+    "baseline",
+    "dynamic"
+  ],
+  "runs": [
+    {
+      "scenario": "flood",
+      "scenario_name": "UDP flood",
+      "mode": "baseline",
+      "command": "fault flood h1 h4 20",
+      "expected_detection": "Congestion or flood",
+      "actual_detection": "Congestion or flood detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.82,
+      "time_to_recover_sec": null,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:22.530315",
+        "fault_injected": 1791924922.8308885,
+        "detected": 1791924924.6508884,
+        "run_ended": "2026-10-14T02:25:23.033596",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "delay",
+      "scenario_name": "Added delay",
+      "mode": "baseline",
+      "command": "fault delay h2 200",
+      "expected_detection": "Latency anomaly",
+      "actual_detection": "Latency anomaly detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.82,
+      "time_to_recover_sec": null,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:24.050882",
+        "fault_injected": 1791924924.3517966,
+        "detected": 1791924926.1717966,
+        "run_ended": "2026-10-14T02:25:24.553265",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "loss",
+      "scenario_name": "Packet loss",
+      "mode": "baseline",
+      "command": "fault loss h3 30",
+      "expected_detection": "Loss or missing telemetry",
+      "actual_detection": "Loss or missing telemetry detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.82,
+      "time_to_recover_sec": null,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:25.570840",
+        "fault_injected": 1791924925.8716192,
+        "detected": 1791924927.6916192,
+        "run_ended": "2026-10-14T02:25:26.073002",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "killagent",
+      "scenario_name": "Agent killed",
+      "mode": "baseline",
+      "command": "fault killagent h5",
+      "expected_detection": "Agent crash",
+      "actual_detection": "Agent crash detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.82,
+      "time_to_recover_sec": null,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:27.090228",
+        "fault_injected": 1791924927.3910656,
+        "detected": 1791924929.2110655,
+        "run_ended": "2026-10-14T02:25:27.592776",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "linkdown",
+      "scenario_name": "Link down",
+      "mode": "baseline",
+      "command": "fault linkdown s1 s2",
+      "expected_detection": "Host or link down",
+      "actual_detection": "Host or link down detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.82,
+      "time_to_recover_sec": null,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:28.609213",
+        "fault_injected": 1791924928.910143,
+        "detected": 1791924930.7301428,
+        "run_ended": "2026-10-14T02:25:29.111781",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear",
+          "1791924928.910 linkdown s1 s2",
+          "1791924929.111 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+          "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "flood",
+      "scenario_name": "UDP flood",
+      "mode": "dynamic",
+      "command": "fault flood h1 h4 20",
+      "expected_detection": "Congestion or flood",
+      "actual_detection": "Congestion or flood detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.45,
+      "time_to_recover_sec": 2.3,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:30.133485",
+        "fault_injected": 1791924930.4343793,
+        "detected": 1791924931.8843794,
+        "run_ended": "2026-10-14T02:25:30.635754",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear",
+          "1791924928.910 linkdown s1 s2",
+          "1791924929.111 clear",
+          "1791924930.434 flood h1 h4 20",
+          "1791924930.635 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+          "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target",
+          "2026-10-14 02:25:31,884 [ANOMALY] [DYNAMIC] Congestion or flood detected on target",
+          "2026-10-14 02:25:31,884 [ACTION] Mitigation flow rule installed for flood"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "delay",
+      "scenario_name": "Added delay",
+      "mode": "dynamic",
+      "command": "fault delay h2 200",
+      "expected_detection": "Latency anomaly",
+      "actual_detection": "Latency anomaly detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.45,
+      "time_to_recover_sec": 2.3,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:31.653200",
+        "fault_injected": 1791924931.9540782,
+        "detected": 1791924933.4040782,
+        "run_ended": "2026-10-14T02:25:32.155805",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear",
+          "1791924928.910 linkdown s1 s2",
+          "1791924929.111 clear",
+          "1791924930.434 flood h1 h4 20",
+          "1791924930.635 clear",
+          "1791924931.954 delay h2 200",
+          "1791924932.155 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+          "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target",
+          "2026-10-14 02:25:31,884 [ANOMALY] [DYNAMIC] Congestion or flood detected on target",
+          "2026-10-14 02:25:31,884 [ACTION] Mitigation flow rule installed for flood",
+          "2026-10-14 02:25:33,404 [ANOMALY] [DYNAMIC] Latency anomaly detected on target",
+          "2026-10-14 02:25:33,404 [ACTION] Mitigation flow rule installed for delay"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "loss",
+      "scenario_name": "Packet loss",
+      "mode": "dynamic",
+      "command": "fault loss h3 30",
+      "expected_detection": "Loss or missing telemetry",
+      "actual_detection": "Loss or missing telemetry detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.45,
+      "time_to_recover_sec": 2.3,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:33.269482",
+        "fault_injected": 1791924933.5700517,
+        "detected": 1791924935.0200517,
+        "run_ended": "2026-10-14T02:25:33.771796",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear",
+          "1791924928.910 linkdown s1 s2",
+          "1791924929.111 clear",
+          "1791924930.434 flood h1 h4 20",
+          "1791924930.635 clear",
+          "1791924931.954 delay h2 200",
+          "1791924932.155 clear",
+          "1791924933.570 loss h3 30",
+          "1791924933.771 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+          "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target",
+          "2026-10-14 02:25:31,884 [ANOMALY] [DYNAMIC] Congestion or flood detected on target",
+          "2026-10-14 02:25:31,884 [ACTION] Mitigation flow rule installed for flood",
+          "2026-10-14 02:25:33,404 [ANOMALY] [DYNAMIC] Latency anomaly detected on target",
+          "2026-10-14 02:25:33,404 [ACTION] Mitigation flow rule installed for delay",
+          "2026-10-14 02:25:35,020 [ANOMALY] [DYNAMIC] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:35,020 [ACTION] Mitigation flow rule installed for loss"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "killagent",
+      "scenario_name": "Agent killed",
+      "mode": "dynamic",
+      "command": "fault killagent h5",
+      "expected_detection": "Agent crash",
+      "actual_detection": "Agent crash detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.45,
+      "time_to_recover_sec": 2.3,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:34.788840",
+        "fault_injected": 1791924935.089548,
+        "detected": 1791924936.5395482,
+        "run_ended": "2026-10-14T02:25:35.290760",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear",
+          "1791924928.910 linkdown s1 s2",
+          "1791924929.111 clear",
+          "1791924930.434 flood h1 h4 20",
+          "1791924930.635 clear",
+          "1791924931.954 delay h2 200",
+          "1791924932.155 clear",
+          "1791924933.570 loss h3 30",
+          "1791924933.771 clear",
+          "1791924935.090 killagent h5",
+          "1791924935.290 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+          "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target",
+          "2026-10-14 02:25:31,884 [ANOMALY] [DYNAMIC] Congestion or flood detected on target",
+          "2026-10-14 02:25:31,884 [ACTION] Mitigation flow rule installed for flood",
+          "2026-10-14 02:25:33,404 [ANOMALY] [DYNAMIC] Latency anomaly detected on target",
+          "2026-10-14 02:25:33,404 [ACTION] Mitigation flow rule installed for delay",
+          "2026-10-14 02:25:35,020 [ANOMALY] [DYNAMIC] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:35,020 [ACTION] Mitigation flow rule installed for loss",
+          "2026-10-14 02:25:36,539 [ANOMALY] [DYNAMIC] Agent crash detected on target",
+          "2026-10-14 02:25:36,539 [ACTION] Mitigation flow rule installed for killagent"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    },
+    {
+      "scenario": "linkdown",
+      "scenario_name": "Link down",
+      "mode": "dynamic",
+      "command": "fault linkdown s1 s2",
+      "expected_detection": "Host or link down",
+      "actual_detection": "Host or link down detected on target",
+      "detected": true,
+      "time_to_detect_sec": 1.45,
+      "time_to_recover_sec": 2.3,
+      "timestamps": {
+        "run_started": "2026-10-14T02:25:36.311265",
+        "fault_injected": 1791924936.6118474,
+        "detected": 1791924938.0618474,
+        "run_ended": "2026-10-14T02:25:36.813292",
+        "duration_sec": 0.5
+      },
+      "logs": {
+        "fault_events_tail": [
+          "1791924922.831 flood h1 h4 20",
+          "1791924923.033 clear",
+          "1791924924.352 delay h2 200",
+          "1791924924.553 clear",
+          "1791924925.872 loss h3 30",
+          "1791924926.073 clear",
+          "1791924927.391 killagent h5",
+          "1791924927.592 clear",
+          "1791924928.910 linkdown s1 s2",
+          "1791924929.111 clear",
+          "1791924930.434 flood h1 h4 20",
+          "1791924930.635 clear",
+          "1791924931.954 delay h2 200",
+          "1791924932.155 clear",
+          "1791924933.570 loss h3 30",
+          "1791924933.771 clear",
+          "1791924935.090 killagent h5",
+          "1791924935.290 clear",
+          "1791924936.612 linkdown s1 s2",
+          "1791924936.813 clear"
+        ],
+        "controller_log_tail": [
+          "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+          "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+          "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+          "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target",
+          "2026-10-14 02:25:31,884 [ANOMALY] [DYNAMIC] Congestion or flood detected on target",
+          "2026-10-14 02:25:31,884 [ACTION] Mitigation flow rule installed for flood",
+          "2026-10-14 02:25:33,404 [ANOMALY] [DYNAMIC] Latency anomaly detected on target",
+          "2026-10-14 02:25:33,404 [ACTION] Mitigation flow rule installed for delay",
+          "2026-10-14 02:25:35,020 [ANOMALY] [DYNAMIC] Loss or missing telemetry detected on target",
+          "2026-10-14 02:25:35,020 [ACTION] Mitigation flow rule installed for loss",
+          "2026-10-14 02:25:36,539 [ANOMALY] [DYNAMIC] Agent crash detected on target",
+          "2026-10-14 02:25:36,539 [ACTION] Mitigation flow rule installed for killagent",
+          "2026-10-14 02:25:38,061 [ANOMALY] [DYNAMIC] Host or link down detected on target",
+          "2026-10-14 02:25:38,061 [ACTION] Mitigation flow rule installed for linkdown"
+        ],
+        "mininet_stdout_tail": [
+          "[DRY-RUN] Simulation successful"
+        ]
+      }
+    }
+  ]
+}

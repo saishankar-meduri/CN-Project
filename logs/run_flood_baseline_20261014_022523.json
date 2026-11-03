@@ -1,0 +1,30 @@
+{
+  "scenario": "flood",
+  "scenario_name": "UDP flood",
+  "mode": "baseline",
+  "command": "fault flood h1 h4 20",
+  "expected_detection": "Congestion or flood",
+  "actual_detection": "Congestion or flood detected on target",
+  "detected": true,
+  "time_to_detect_sec": 1.82,
+  "time_to_recover_sec": null,
+  "timestamps": {
+    "run_started": "2026-10-14T02:25:22.530315",
+    "fault_injected": 1791924922.8308885,
+    "detected": 1791924924.6508884,
+    "run_ended": "2026-10-14T02:25:23.033596",
+    "duration_sec": 0.5
+  },
+  "logs": {
+    "fault_events_tail": [
+      "1791924922.831 flood h1 h4 20",
+      "1791924923.033 clear"
+    ],
+    "controller_log_tail": [
+      "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target"
+    ],
+    "mininet_stdout_tail": [
+      "[DRY-RUN] Simulation successful"
+    ]
+  }
+}

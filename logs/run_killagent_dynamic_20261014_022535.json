@@ -1,0 +1,58 @@
+{
+  "scenario": "killagent",
+  "scenario_name": "Agent killed",
+  "mode": "dynamic",
+  "command": "fault killagent h5",
+  "expected_detection": "Agent crash",
+  "actual_detection": "Agent crash detected on target",
+  "detected": true,
+  "time_to_detect_sec": 1.45,
+  "time_to_recover_sec": 2.3,
+  "timestamps": {
+    "run_started": "2026-10-14T02:25:34.788840",
+    "fault_injected": 1791924935.089548,
+    "detected": 1791924936.5395482,
+    "run_ended": "2026-10-14T02:25:35.290760",
+    "duration_sec": 0.5
+  },
+  "logs": {
+    "fault_events_tail": [
+      "1791924922.831 flood h1 h4 20",
+      "1791924923.033 clear",
+      "1791924924.352 delay h2 200",
+      "1791924924.553 clear",
+      "1791924925.872 loss h3 30",
+      "1791924926.073 clear",
+      "1791924927.391 killagent h5",
+      "1791924927.592 clear",
+      "1791924928.910 linkdown s1 s2",
+      "1791924929.111 clear",
+      "1791924930.434 flood h1 h4 20",
+      "1791924930.635 clear",
+      "1791924931.954 delay h2 200",
+      "1791924932.155 clear",
+      "1791924933.570 loss h3 30",
+      "1791924933.771 clear",
+      "1791924935.090 killagent h5",
+      "1791924935.290 clear"
+    ],
+    "controller_log_tail": [
+      "2026-10-14 02:25:24,650 [ANOMALY] [BASELINE] Congestion or flood detected on target",
+      "2026-10-14 02:25:26,171 [ANOMALY] [BASELINE] Latency anomaly detected on target",
+      "2026-10-14 02:25:27,691 [ANOMALY] [BASELINE] Loss or missing telemetry detected on target",
+      "2026-10-14 02:25:29,211 [ANOMALY] [BASELINE] Agent crash detected on target",
+      "2026-10-14 02:25:30,730 [ANOMALY] [BASELINE] Host or link down detected on target",
+      "2026-10-14 02:25:31,884 [ANOMALY] [DYNAMIC] Congestion or flood detected on target",
+      "2026-10-14 02:25:31,884 [ACTION] Mitigation flow rule installed for flood",
+      "2026-10-14 02:25:33,404 [ANOMALY] [DYNAMIC] Latency anomaly detected on target",
+      "2026-10-14 02:25:33,404 [ACTION] Mitigation flow rule installed for delay",
+      "2026-10-14 02:25:35,020 [ANOMALY] [DYNAMIC] Loss or missing telemetry detected on target",
+      "2026-10-14 02:25:35,020 [ACTION] Mitigation flow rule installed for loss",
+      "2026-10-14 02:25:36,539 [ANOMALY] [DYNAMIC] Agent crash detected on target",
+      "2026-10-14 02:25:36,539 [ACTION] Mitigation flow rule installed for killagent"
+    ],
+    "mininet_stdout_tail": [
+      "[DRY-RUN] Simulation successful"
+    ]
+  }
+}

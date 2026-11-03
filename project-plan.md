@@ -103,27 +103,27 @@ Each scenario is run in both baseline and dynamic mode for comparison.
 ## Task Breakdown
 
 ### Person A: Sai
-- [ ] Create Mininet topology (3-switch triangle, 4 to 6 hosts)
-- [ ] Write the host telemetry agent script
-- [ ] Write scripts for each fault injection scenario
-- [ ] Write a test runner that executes each fault in baseline and dynamic mode and saves metrics
-- [ ] Share the topology and agent scripts with the team
+- [x] Create Mininet topology (3-switch triangle, 4 to 6 hosts)
+- [x] Write the host telemetry agent script
+- [x] Write scripts for each fault injection scenario
+- [x] Write a test runner that executes each fault in baseline and dynamic mode and saves metrics
+- [x] Share the topology and agent scripts with the team
 
 ### Person B: Chinmayi
-- [ ] Set up Ryu with a basic learning switch
-- [ ] Implement the threaded UDP telemetry collector (handle malformed JSON, detect lost `seq`)
-- [ ] Implement periodic flow and port stats polling
-- [ ] Implement correlation and anomaly detection rules
-- [ ] Implement dynamic responses (drop/rate-limit, reroute, flow cleanup)
-- [ ] Add baseline/dynamic mode flag
-- [ ] Log detected anomalies and actions taken with timestamps
+- [x] Set up Ryu with a basic learning switch
+- [x] Implement the threaded UDP telemetry collector (handle malformed JSON, detect lost `seq`)
+- [x] Implement periodic flow and port stats polling
+- [x] Implement correlation and anomaly detection rules
+- [x] Implement dynamic responses (drop/rate-limit, reroute, flow cleanup)
+- [x] Add baseline/dynamic mode flag
+- [x] Log detected anomalies and actions taken with timestamps
 
 ### Person C: Navaneeth
-- [ ] Draw the architecture diagram
-- [ ] Draft the report, structured around the rubric headings: problem and architecture, socket implementation, Mininet + SDN, socket-SDN integration, testing, performance evaluation, conclusion, references
-- [ ] Write the README with install and run steps (the repo must be reproducible from scratch)
-- [ ] After A and B's code works: run each fault scenario in both modes, save logs and screenshots, fill in the results table
-- [ ] Build presentation slides and record a demo video
+- [x] Draw the architecture diagram
+- [x] Draft the report, structured around the rubric headings: problem and architecture, socket implementation, Mininet + SDN, socket-SDN integration, testing, performance evaluation, conclusion, references
+- [x] Write the README with install and run steps (the repo must be reproducible from scratch)
+- [x] After A and B's code works: run each fault scenario in both modes, save logs and screenshots, fill in the results table
+- [x] Build presentation slides and record a demo video
 
 ## Milestones
 
