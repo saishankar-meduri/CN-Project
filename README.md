@@ -1,4 +1,4 @@
-# Distributed Network Monitoring with SOFTWARE DEFINED NETWORK(SDM)
+# Distributed Network Monitoring with Software Defined Network(SDN)
 
 [![OpenFlow 1.3](https://img.shields.io/badge/OpenFlow-1.3-blue.svg)](https://opennetworking.org/)
 [![Mininet](https://img.shields.io/badge/Mininet-2.3.0+-orange.svg)](http://mininet.org/)
