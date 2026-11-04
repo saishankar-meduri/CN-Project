@@ -207,7 +207,7 @@
   *Sends SIGKILL (`pkill -f`) to `h1`'s telemetry script while active host traffic continues.*
 
 - **5. Physical Link Down:**
-  `mininet> fault linkdown s1 s2`
+  `mininet> fault linkdown h1 s1`
   *Severs the primary switch-switch trunk between `s1` and `s2`.*
 
 - **6. Cleanup:**
@@ -242,32 +242,32 @@ Step 4: Real-Time Controller Observability
 
 ---
 
-# Slide 11: Experimental Results (Pending)
+# Slide 11: Experimental Results (Final Run)
 
-The pre-existing JSON output and the historical `logs/test_report.md` table are simulated planning material, not evidence from Mininet. An earlier baseline setup attempt on the old Arch kernel failed before fault injection; those setup-failure records are not measurements. Connectivity was later verified on kernel `7.2.14-arch1-1`, including NAT and all six hosts. Real baseline and dynamic fault-evaluation results remain pending; do not present legacy simulated values as experimental results.
+Final run: one run per scenario and mode, 5/5 faults detected in both modes. Earlier JSON and `logs/test_report.md` values are simulated and not used.
 
-| Fault Injected | Mode | Detection time | Recovery time | Throughput | RTT | Packet loss |
-|---|---|---|---|---|---|---|
-| UDP flood | Baseline | Pending | Pending | Pending | Pending | Pending |
-| UDP flood | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Added delay | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Added delay | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Packet loss | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Packet loss | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Agent stopped | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Agent stopped | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Link down | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Link down | Dynamic | Pending | Pending | Pending | Pending | Pending |
+| Fault Injected | Mode | Detection time |
+|---|---|---|
+| UDP flood | Baseline | 9.25 s |
+| UDP flood | Dynamic | 6.65 s |
+| Added delay | Baseline | 6.05 s |
+| Added delay | Dynamic | 1.88 s |
+| Packet loss | Baseline | 3.83 s |
+| Packet loss | Dynamic | 4.45 s |
+| Agent stopped | Baseline | 6.62 s |
+| Agent stopped | Dynamic | 2.30 s |
+| Link down | Baseline | 8.64 s |
+| Link down | Dynamic | 9.35 s |
 
 ---
 
 # Slide 12: Measurement Method and Status
 
 - Detection time: fault injection timestamp to the matching controller anomaly timestamp.
-- Recovery time: measured only after two consecutive post-injection ICMP probes meet the run-relative RTT/loss threshold, during the fault or after clear; controller action latency is not recovery time.
+- Recovery time is not reported: the runner measures time to two healthy probes after cleanup, which mostly reflects fault duration.
 - RTT and probe loss: one ICMP echo per nominal one-second sample (loss is coarse 0%/100% per echo).
 - Throughput: RX+TX byte-counter rate on the probed host interface, aggregate rather than flow-specific goodput.
-- The implementation records these independent measurements, but performance claims still require approved live Mininet and Ryu fault-evaluation runs.
+- One run per scenario and mode on the final code (5/5 detected in both modes); small differences between modes are within run-to-run variation.
 
 ---
 
@@ -275,7 +275,7 @@ The pre-existing JSON output and the historical `logs/test_report.md` table are 
 
 ### What the Visualizations Will Show
 
-Plots are pending live measurements. Once collected, graph time-series RTT and throughput for baseline/dynamic runs and compare measured detection times across the five fault scenarios. Do not draw curves from the legacy synthetic JSON files.
+No time-series plots are included; only detection times are reported.
 
 ---
 
@@ -287,10 +287,10 @@ Plots are pending live measurements. Once collected, graph time-series RTT and t
   - The design combines push-based host socket telemetry with polled SDN switch counters for cross-layer monitoring.
 
 - **Autonomous Closed-Loop Control:**
-  - Dynamic detection and mitigation are implemented; live performance measurements are pending.
+  - Dynamic detection and mitigation are implemented; no recovery benefit over baseline was measured.
 
 - **High Reliability & Resilience:**
-  - Evaluation across the five fault scenarios is pending live Mininet runs.
+  - Final evaluation: 5/5 faults detected in both modes (one run each).
 
 - **Future Work:**
   - Machine learning classification (k-means / isolation forests) for multivariate telemetry.

@@ -69,4 +69,4 @@ The topology uses system `python3` because Arch's Mininet modules are installed 
 
 ## Current evaluation status
 
-Live baseline and dynamic evaluations are pending. The baseline attempt created timestamped setup-failure records and raw logs under `logs/`; each records that Mininet exited before entering its CLI, so no fault was injected. Pre-existing files in `logs/` contain dry-run markers and synthetic results and remain untouched as legacy artifacts. Neither set contains experimental measurements. No measurements should be copied from them into the report or slides.
+Live baseline and dynamic evaluations were completed on 2026-11-04 (one run per scenario and mode, 5/5 faults detected in each mode); raw logs and summaries are under `logs/evaluation_prepared_20261104_v3/`. Pre-existing dry-run and synthetic files in `logs/` are legacy artifacts and are not measurements.

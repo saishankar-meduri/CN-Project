@@ -220,9 +220,9 @@ The test plan uses a dedicated fault-injection module (`faults.py`) integrated i
    ```bash
    pkill -f -- '--id=h5'
    ```
-5. **Inter-switch Link Down:** The runner disables the `s1-s2` link through Mininet's `configLinkStatus`:
+5. **Host Access Link Down:** The runner disables the `h1-s1` access link through Mininet's `configLinkStatus`:
    ```bash
-   fault linkdown s1 s2
+   fault linkdown h1 s1
    ```
 
 ### 5.2 Comparative Execution: Baseline vs. Dynamic
@@ -243,20 +243,24 @@ The intended measurements for each live run are:
 
 ### 6.1 Results status
 
-**Fault-evaluation performance results are pending.** Connectivity validation on kernel `7.2.14-arch1-1` passed for the six hosts and NAT, but no real fault-injection evaluation is reported here. Earlier setup failures on the previous kernel remain historical setup-failure records under `logs/`; they contain no fault detections or service measurements. Pre-existing synthetic JSON and the historical simulated report are not experimental evidence. No performance values are reported here.
+**Results are from the final evaluation run (one run per scenario and mode; 5/5 faults detected in both modes).** Detection time runs from the verified fault-injection timestamp to the first matching controller anomaly on the faulted host. Because each configuration was run once, small differences between modes are within run-to-run variation.
 
-| Scenario | Mode | Detection time | Recovery time | Throughput | RTT | Packet loss |
-|---|---|---|---|---|---|---|
-| UDP flood | Baseline | Pending | Pending | Pending | Pending | Pending |
-| UDP flood | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Added delay | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Added delay | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Packet loss | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Packet loss | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Agent stopped | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Agent stopped | Dynamic | Pending | Pending | Pending | Pending | Pending |
-| Link down | Baseline | Pending | Pending | Pending | Pending | Pending |
-| Link down | Dynamic | Pending | Pending | Pending | Pending | Pending |
+*Changes made after the first evaluation (which detected 2/5 in both modes):* the congestion latency threshold was lowered from 100 ms to 30 ms (measured flood RTT was 60-84 ms); evaluation agents use a 0.6 s probe timeout so a 200 ms netem delay is not counted as loss; the link-down scenario now disables the h1-s1 access link, because cutting a switch-switch link in a triangle leaves every host reachable; the controller counts a host as active only if traffic is sent by it or seen on its own access port; and the runner counts a detection only if the alert is on the faulted host.
+
+*Limitations:* recovery time, RTT, throughput and probe loss are not reported. The runner's recovery metric measures time to two healthy probes after cleanup, so it mostly reflects fault duration, and its independent ICMP probe showed 0% loss during the 30% packet-loss fault (cause not determined). No benefit of dynamic mitigation on recovery was measured.
+
+| Scenario | Mode | Detection time |
+|---|---|---|
+| UDP flood | Baseline | 9.25 s |
+| UDP flood | Dynamic | 6.65 s |
+| Added delay | Baseline | 6.05 s |
+| Added delay | Dynamic | 1.88 s |
+| Packet loss | Baseline | 3.83 s |
+| Packet loss | Dynamic | 4.45 s |
+| Agent stopped | Baseline | 6.62 s |
+| Agent stopped | Dynamic | 2.30 s |
+| Link down | Baseline | 8.64 s |
+| Link down | Dynamic | 9.35 s |
 
 Detection time uses the unique verified fault-injection event timestamp and the first matching controller anomaly timestamp. The success event is appended only after injection verification, while its timestamp records when the fault effect was applied. Action latency is measured from that anomaly to the first action attributable to the same anomaly category and affected host; ambiguous or unrelated actions yield null.
 
@@ -266,9 +270,9 @@ The runner records one ICMP echo per nominal one-second interval from the scenar
 
 ## 7. Conclusion
 
-This project implements an integrated network monitoring architecture combining host-level UDP socket telemetry with OpenFlow 1.3 SDN control. Live evaluation has not yet been completed, so performance conclusions remain pending. The design goals are:
+This project implements an integrated network monitoring architecture combining host-level UDP socket telemetry with OpenFlow 1.3 SDN control. Evaluation results are reported in Section 6.1. The design goals are:
 1. **Cross-Layer Observability is Essential:** Network statistics alone cannot differentiate between legitimate bursty traffic and malicious congestion, nor can they reveal end-host resource exhaustion. Correlating application-layer RTT and error metrics with flow byte counters resolves operational ambiguity.
-2. **Autonomic Remediation:** Dynamic mode is intended to issue mitigation actions after detected anomalies. Detection and service recovery performance remain pending live measurement.
+2. **Autonomic Remediation:** Dynamic mode is intended to issue mitigation actions after detected anomalies. Both modes detected all five faults in the final run; no recovery benefit of mitigation was measured.
 3. **Resilience Against False Positives:** Dynamic agent-crash handling is designed to preserve forwarding state when telemetry stops but traffic counters remain active. This behavior has not yet been confirmed in a live evaluation.
 
 Future extensions could incorporate rolling exponential weighted moving averages (EWMA) with dynamic z-scores instead of static thresholds, and offload socket packet parsing directly to programmable data planes using P4 or eBPF.

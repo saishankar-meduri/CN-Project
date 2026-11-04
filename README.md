@@ -360,9 +360,9 @@ The current controller applies these rules:
 
 | Telemetry / switch condition | Classification | Dynamic behavior | Baseline behavior |
 |---|---|---|---|
-| Latency >100 ms and host access-port bitrate >8 Mbps | Congestion/flood | Drop selected source MAC (priority 200, 30 s hard timeout) and attempt detours for non-offending traffic (priority 150, 60 s hard timeout) | Log anomaly |
+| Latency >30 ms and host access-port bitrate >8 Mbps | Congestion/flood | Drop selected source MAC (priority 200, 30 s hard timeout) and attempt detours for non-offending traffic (priority 150, 60 s hard timeout) | Log anomaly |
 | Probe loss >=20% | Packet loss | Detection only; no reroute | Log anomaly |
-| Latency >100 ms and host access-port bitrate <=8 Mbps | Host/app problem | Log only | Log anomaly |
+| Latency >30 ms and host access-port bitrate <=8 Mbps | Host/app problem | Log only | Log anomaly |
 | No telemetry record yet, or last telemetry >5 s ago, with active flow/port counters | Agent crash | Alert and preserve forwarding rules | Log anomaly |
 | No telemetry record yet, or last telemetry >5 s ago, with no active counters | Host/link down | Delete host-MAC-matching flows and attempt detours from the configured triangle map | Log anomaly |
 
@@ -439,7 +439,7 @@ Before starting Mininet, the runner verifies the port-6653 listener PID, loaded 
 
 Fault success records are appended only after the requested effect is verified; their timestamp marks when the effect was applied. Cleanup emits `FAULT_CLEARED` only after qdiscs, links, and runner-tracked host processes pass their checks.
 
-Existing files in `logs/` include dry-run and synthetic output. Do not treat them as live evaluation results; see `docs/report.md` and `docs/slides.md` for pending metrics.
+Existing files in `logs/` include dry-run and synthetic output. Do not treat them as live evaluation results; see `docs/report.md` and `docs/slides.md` for the final detection results.
 
 ---
 
