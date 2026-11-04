@@ -197,13 +197,13 @@ This document specifies the end-to-end architectural design, module interfaces, 
        | 3. Correlate host IP/MAC with switch ports and active flow rules
        | 4. Apply the implemented telemetry and bitrate rules (see docs/report.md):
        |
-       +---> Case A: Latency > 100ms AND host access-port bitrate > 8 Mbps (Congestion / Flood)
+       +---> Case A: Latency > 30ms AND host access-port bitrate > 8 Mbps (Congestion / Flood)
        |            |
        |            +--> Baseline Mode: Log [CONGESTION_ALERT] to disk
        |            +--> Dynamic Mode:  Drop selected source MAC (priority 200);
        |                                attempt detours for other traffic (priority 150)
        |
-       +---> Case B: Latency > 100ms AND host access-port bitrate <= 8 Mbps (Host / App Problem)
+       +---> Case B: Latency > 30ms AND host access-port bitrate <= 8 Mbps (Host / App Problem)
        |            |
        |            +--> Baseline & Dynamic: Log anomaly; no network reroute
        |

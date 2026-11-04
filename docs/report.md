@@ -188,9 +188,9 @@ The following rules describe the current controller implementation. Sequence gap
 
 | Condition | Controller classification | Baseline behavior | Dynamic behavior |
 |---|---|---|---|
-| App latency >100 ms and host access-port throughput >8 Mbps | Congestion/flood | Log anomaly | Find highest-rate host MAC, install priority 200 drop rules with 30 s hard timeout, then attempt alternate-path rules for other flows at priority 150 with 60 s timeout |
+| App latency >30 ms and host access-port throughput >8 Mbps | Congestion/flood | Log anomaly | Find highest-rate host MAC, install priority 200 drop rules with 30 s hard timeout, then attempt alternate-path rules for other flows at priority 150 with 60 s timeout |
 | Probe loss >=20% | Packet loss | Log anomaly | Detection only; no reroute is issued |
-| App latency >100 ms and host access-port throughput <=8 Mbps | Host/app problem | Log anomaly | Log only; no network reroute |
+| App latency >30 ms and host access-port throughput <=8 Mbps | Host/app problem | Log anomaly | Log only; no network reroute |
 | No telemetry record yet, or last telemetry >5 s ago, and flow/port counters show activity | Agent crash | Log anomaly | Alert only; keep forwarding state |
 | No telemetry record yet, or last telemetry >5 s ago, and no active counters | Host/link down | Log anomaly | Delete host-MAC-matching flows and attempt alternate-path rules using the triangle mapping |
 

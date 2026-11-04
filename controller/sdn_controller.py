@@ -21,8 +21,8 @@ Core Subsystems:
      OFPPortStatsRequest.
    - Computes delta throughput (bps) per flow and per port.
 4. Correlation and Anomaly Detection Engine:
-   - Rule 1: High latency (>100ms) + High throughput (>8Mbps) -> CONGESTION/FLOOD
-   - Rule 2: High latency (>100ms) + Normal throughput (<=8Mbps) -> HOST/APP PROBLEM
+   - Rule 1: High latency (>30ms) + High throughput (>8Mbps) -> CONGESTION/FLOOD
+   - Rule 2: High latency (>30ms) + Normal throughput (<=8Mbps) -> HOST/APP PROBLEM
    - Rule 3: Missing telemetry (>5s) + Active flows -> AGENT CRASH
    - Rule 4: Missing telemetry (>5s) + No flows -> HOST/LINK DOWN
 5. Dynamic Mitigation Engine:
@@ -88,7 +88,7 @@ except cfg.DuplicateOptError:
 DEFAULT_TELEMETRY_PORT = 9999
 STATS_POLL_INTERVAL_SEC = 5.0
 TELEMETRY_TIMEOUT_SEC = 5.0
-CONGESTION_LATENCY_THRESHOLD_MS = 100.0
+CONGESTION_LATENCY_THRESHOLD_MS = 30.0
 CONGESTION_THROUGHPUT_THRESHOLD_BPS = 8_000_000.0  # 8 Mbps on 10 Mbps bottleneck
 
 # Flow Priorities
@@ -684,8 +684,8 @@ class SDNController(app_manager.RyuApp):
         """Correlates telemetry data with OpenFlow statistics across all hosts.
 
         Detection Rules:
-        - Rule 1: latency > 100ms AND throughput > 8 Mbps -> CONGESTION/FLOOD
-        - Rule 2: latency > 100ms AND throughput normal   -> HOST/APP PROBLEM
+        - Rule 1: latency > 30ms AND throughput > 8 Mbps -> CONGESTION/FLOOD
+        - Rule 2: latency > 30ms AND throughput normal   -> HOST/APP PROBLEM
         - Rule 3: telemetry missing > 5s AND flows active -> AGENT CRASH
         - Rule 4: telemetry missing > 5s AND no flows     -> HOST/LINK DOWN
         """
@@ -739,7 +739,7 @@ class SDNController(app_manager.RyuApp):
                 throughput_bps = self._get_host_throughput(mac, dpid, port)
 
                 if latency_ms > CONGESTION_LATENCY_THRESHOLD_MS and throughput_bps > CONGESTION_THROUGHPUT_THRESHOLD_BPS:
-                    # Rule 1: High latency (>100ms) AND very high throughput (>8 Mbps) -> CONGESTION/FLOOD
+                    # Rule 1: High latency (>30ms) AND very high throughput (>8 Mbps) -> CONGESTION/FLOOD
                     self.log_event(
                         f"ANOMALY DETECTED [CONGESTION/FLOOD] on {host_id}: "
                         f"App latency = {latency_ms:.2f} ms (> {CONGESTION_LATENCY_THRESHOLD_MS} ms), "
@@ -760,7 +760,7 @@ class SDNController(app_manager.RyuApp):
                     # Detection only: no automatic reroute is claimed for packet loss.
 
                 elif latency_ms > CONGESTION_LATENCY_THRESHOLD_MS and throughput_bps <= CONGESTION_THROUGHPUT_THRESHOLD_BPS:
-                    # Rule 2: High latency (>100ms) AND throughput normal -> HOST/APP PROBLEM
+                    # Rule 2: High latency (>30ms) AND throughput normal -> HOST/APP PROBLEM
                     self.log_event(
                         f"ANOMALY DETECTED [HOST/APP PROBLEM] on {host_id}: "
                         f"App latency = {latency_ms:.2f} ms (> {CONGESTION_LATENCY_THRESHOLD_MS} ms) "
@@ -785,7 +785,7 @@ class SDNController(app_manager.RyuApp):
             if bps > 1000.0:
                 _, _, match_items = flow_sig
                 match_dict = dict(match_items)
-                if match_dict.get("eth_src") == mac or match_dict.get("eth_dst") == mac:
+                if match_dict.get("eth_src") == mac:
                     return True
 
         # Do not treat cumulative packet_count > 0 as live traffic: counters remain

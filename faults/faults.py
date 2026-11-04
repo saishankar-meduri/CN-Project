@@ -248,29 +248,269 @@ def inject_fault(net, kind, args, state):
 
 class FaultCLI(CLI):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        # Mininet's CLI.__init__ enters cmdloop before returning. Command
+        # handlers can therefore run while this constructor is still inside
+        # super().__init__, so initialize every field they use first.
         self.downed = []
+        self.active_processes = []
+        self.agent_processes = {}
+        self.measurement_counters = {}
+        self._last_cleanup_success = True
+        self._cleanup_event_logged = False
+        self.runtime_state = {
+            "manifest_path": RUNTIME_STATE_FILE,
+            "run_token": os.environ.get("SDN_RUN_TOKEN"),
+            "topology_pid": os.getppid(),
+            "process_group_id": os.getpgrp(),
+            "host_pids": {},
+            "switch_pids": {},
+            "agents": {},
+            "iperf": [],
+            "active_qdiscs": [],
+            "downed_links": [],
+        }
+        if RUNTIME_STATE_FILE and os.path.exists(RUNTIME_STATE_FILE):
+            try:
+                with open(RUNTIME_STATE_FILE, encoding="utf-8") as f:
+                    self.runtime_state.update(json.load(f))
+            except (OSError, ValueError):
+                pass
+        if not self.runtime_state.get("run_token"):
+            self.runtime_state["run_token"] = uuid.uuid4().hex
+        try:
+            super().__init__(*args, **kwargs)
+        except BaseException as init_error:
+            # A command may have started a fault or processes before CLI setup
+            # failed. Clear the same run-owned resources before propagating.
+            try:
+                self._clear_run_state(getattr(self, "mn", None))
+                cleanup_errors = []
+            except Exception as exc:
+                log_cleanup_event("CLEANUP_FAILED during FaultCLI initialization: %s" % exc)
+                cleanup_errors = [str(exc)]
+            if cleanup_errors:
+                raise RuntimeError(
+                    "FaultCLI initialization failed and process cleanup was incomplete: "
+                    + "; ".join(cleanup_errors)
+                ) from init_error
+            raise
+
+    def do_measure(self, line):
+        """measure <host> <peer>: independent ping and host-interface counter sample."""
+        args = line.split()
+        try:
+            if len(args) != 2 or args[0] not in PEERS or args[1] not in PEERS:
+                raise ValueError("usage: measure <host> <peer>")
+            host_name, peer_name = args
+            host = self.mn[host_name]
+            iface = host_name + "-eth0"
+            started = time.time()
+            ping = _run_host_argv(host, ["ping", "-n", "-c", "1", "-W", "1",
+                                         self.mn[peer_name].IP()], timeout=3.0)
+            ended = time.time()
+            loss = 0.0 if "1 received" in ping or "1 packets received" in ping else 100.0
+            rtt = None
+            match = re.search(r"(?:rtt|round-trip) min/avg/max/(?:mdev|stddev) = "
+                              r"[\d.]+/([\d.]+)/", ping)
+            if match:
+                rtt = float(match.group(1))
+            counters = _run_host_argv(host, ["cat",
+                "/sys/class/net/%s/statistics/tx_bytes" % iface,
+                "/sys/class/net/%s/statistics/rx_bytes" % iface], timeout=2.0)
+            values = [int(value) for value in counters.split()]
+            if len(values) != 2:
+                raise FaultInjectionError("invalid interface counters for %s" % iface)
+            tx, rx = values
+            current = (tx, rx, ended)
+            previous = self.measurement_counters.get(host_name)
+            throughput = None
+            sample_interval = None
+            if previous and ended > previous[2]:
+                sample_interval = ended - previous[2]
+                throughput = ((tx - previous[0] + rx - previous[1]) * 8.0 /
+                              (ended - previous[2]) / 1_000_000.0)
+            self.measurement_counters[host_name] = current
+            record = {"host": host_name, "peer": peer_name, "timestamp": ended,
+                      "probe_duration_sec": round(ended - started, 3),
+                      "counter_interval_sec": round(sample_interval, 3) if sample_interval else None,
+                      "rtt_ms": rtt,
+                      "packet_loss_pct": loss, "host_interface_aggregate_mbps": throughput}
+            print("MEASURE_JSON=" + json.dumps(record, sort_keys=True), flush=True)
+        except Exception as exc:
+            print("MEASURE_ERROR=" + str(exc), flush=True)
+
+    def do_runner_ack(self, token):
+        """Private synchronization command used by the subprocess runner."""
+        token = token.strip()
+        if not re.fullmatch(r"[0-9a-f]{32}", token):
+            print("RUNNER_ACK_ERROR=malformed-token", flush=True)
+            return
+        # Mininet's cmd.Cmd loop runs this command only after the preceding
+        # command handler has returned, so this marker is a completion ack.
+        print("RUNNER_ACK=" + token, flush=True)
+
+    def _stop_agents(self, net):
+        """Stop only agent subprocesses started and tracked by this CLI instance."""
+        errors = []
+        remaining = {}
+        for host, proc in self.agent_processes.items():
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                if proc.poll() is None:
+                    remaining[host] = proc
+                    errors.append("agent process remains alive on %s" % host)
+            except Exception as exc:
+                remaining[host] = proc
+                errors.append("could not stop agent on %s: %s" % (host, exc))
+        self.agent_processes = remaining
+        return errors
+
+    def _verified_agent_record(self, host, proc):
+        """Wait briefly for this run/host's exact host-visible agent PID."""
+        pid = getattr(proc, "pid", None)
+        host_pid = self.runtime_state.get("host_pids", {}).get(host)
+        if not host_pid and self.mn and host in self.mn:
+            host_pid = getattr(self.mn[host], "pid", None)
+        run_id = self.runtime_state.get("run_token")
+        if not isinstance(pid, int) or pid <= 0 or not host_pid or not run_id:
+            return None
+        deadline = time.monotonic() + 1.0
+        while True:
+            details = _read_process_identity(pid)
+            if _agent_identity_matches(details, host, run_id, AGENT):
+                return {"pid": pid, "host": host, "run_id": run_id,
+                        "host_pid": host_pid, "pid_scope": "host",
+                        "command": os.path.realpath(AGENT),
+                        "start_ticks": details["start_ticks"]}
+            if proc.poll() is not None or time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
 
     @staticmethod
-    def _stop_agents(net):
-        """Stop telemetry agents in every host namespace."""
-        for host in PEERS:
-            # The bracket expression prevents pkill from matching its own shell command.
-            net[host].cmd("pkill -f '[a]gent.py' 2>/dev/null || true")
+    def _stop_tracked_processes(processes):
+        """Stop and reap tracked auxiliary processes; retain any that survive."""
+        errors = []
+        remaining = []
+        for proc in processes:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                if proc.poll() is None:
+                    remaining.append(proc)
+                    errors.append("tracked process remains alive")
+            except Exception as exc:
+                remaining.append(proc)
+                errors.append("could not stop tracked process: %s" % exc)
+        processes[:] = remaining
+        return errors
+
+    def _clear_run_state(self, net):
+        if net is None:
+            raise FaultInjectionError("Mininet network is unavailable for cleanup")
+        if getattr(self, "_cleanup_event_logged", False):
+            return
+        failures = []
+        removed_qdiscs = []
+        runtime_state = getattr(self, "runtime_state", {
+            "active_qdiscs": [], "agents": {}, "iperf": [], "downed_links": []})
+        active_hosts = {item.get("host") for item in runtime_state.get("active_qdiscs", [])}
+        for host_name in PEERS:
+            if host_name not in active_hosts:
+                continue
+            iface = "%s-eth0" % host_name
+            try:
+                _run_host_argv(net[host_name], ["tc", "qdisc", "del", "dev", iface,
+                                                "root"], timeout=2.0, check_return=False)
+                observed = _run_host_argv(net[host_name], ["tc", "qdisc", "show",
+                                                           "dev", iface], timeout=2.0).lower()
+                if "netem" in observed:
+                    failures.append("netem remains on %s" % iface)
+                else:
+                    # Capture immediately after the verification read.
+                    removed_qdiscs.append((host_name, iface, time.time()))
+            except Exception as exc:
+                failures.append("qdisc cleanup failed on %s: %s" % (iface, exc))
+        failures.extend(self._stop_agents(net))
+        for sw1, sw2 in list(self.downed):
+            try:
+                net.configLinkStatus(sw1, sw2, "up")
+                links = net.linksBetween(net[sw1], net[sw2])
+                if not links or any(not link.intf1.isUp() or not link.intf2.isUp()
+                                    for link in links):
+                    failures.append("link %s-%s did not return up" % (sw1, sw2))
+            except Exception as exc:
+                failures.append("link %s-%s cleanup failed: %s" % (sw1, sw2, exc))
+        failures.extend(self._stop_tracked_processes(self.active_processes))
+        if failures:
+            raise FaultInjectionError("cleanup verification failed: " + "; ".join(failures))
+        active = runtime_state.get("active_qdiscs", [])
+        for host_name, iface, stamp in removed_qdiscs:
+            log_cleanup_event("QDISC_REMOVED host=%s interface=%s" % (host_name, iface),
+                              timestamp=stamp)
+            active[:] = [item for item in active if not (
+                item.get("host") == host_name and item.get("interface") == iface)]
+        self.downed = []
+        runtime_state["agents"] = {}
+        runtime_state["iperf"] = []
+        runtime_state["downed_links"] = []
+        _write_runtime_state(runtime_state)
+        log_cleanup_event("FAULT_CLEARED")
+        self._cleanup_event_logged = True
 
     def do_agents(self, line):
         """agents start|stop"""
         net = self.mn
         if line.strip() == "start":
             # Make start idempotent so repeated demos do not create duplicate agents.
-            self._stop_agents(net)
-            for h, peer in PEERS.items():
-                net[h].cmd("python3 %s --id=%s --peer %s > /dev/null 2>&1 &"
-                           % (AGENT, h, net[peer].IP()))
+            stop_errors = self._stop_agents(net)
+            if stop_errors:
+                raise RuntimeError("could not stop existing agents: " + "; ".join(stop_errors))
+            self._cleanup_event_logged = False
+            self.runtime_state["agents"] = {}
+            try:
+                for h, peer in PEERS.items():
+                    proc = net[h].popen(
+                        [sys.executable, AGENT, "--id=%s" % h,
+                         "--run-id=%s" % self.runtime_state["run_token"],
+                         "--peer", net[peer].IP(), "--timeout", "0.6"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.agent_processes[h] = proc
+                    record = self._verified_agent_record(h, proc)
+                    if record is None:
+                        raise RuntimeError("could not verify run-owned telemetry agent on %s" % h)
+                    self.runtime_state.setdefault("host_pids", {})[h] = record["host_pid"]
+                    self.runtime_state["agents"][h] = record
+                    _write_runtime_state(self.runtime_state)
+            except Exception as startup_error:
+                stop_errors = self._stop_agents(net)
+                self.runtime_state["agents"] = {
+                    host: record for host, record in self.runtime_state["agents"].items()
+                    if host in self.agent_processes
+                }
+                _write_runtime_state(self.runtime_state)
+                if stop_errors:
+                    raise RuntimeError("agent startup failed and cleanup was incomplete: "
+                                       + "; ".join(stop_errors)) from startup_error
+                raise
             log_event("agents started on all six hosts")
         elif line.strip() == "stop":
-            self._stop_agents(net)
-            log_event("agents stopped on all six hosts")
+            stop_errors = self._stop_agents(net)
+            if stop_errors:
+                raise RuntimeError("could not stop agents: " + "; ".join(stop_errors))
+            self.runtime_state["agents"] = {}
+            _write_runtime_state(self.runtime_state)
+            log_cleanup_event("AGENTS_STOPPED count=%d" % len(PEERS))
         else:
             print("usage: agents start|stop")
 
@@ -280,38 +520,25 @@ class FaultCLI(CLI):
         net = self.mn
         try:
             kind = a[0]
-            if kind == "flood":
-                src, dst = net[a[1]], net[a[2]]
-                secs = int(a[3]) if len(a) > 3 else 20
-                dst.cmd("iperf -s -u > /dev/null 2>&1 &")
-                src.cmd("iperf -c %s -u -b 50M -t %d > /dev/null 2>&1 &" % (dst.IP(), secs))
-                log_event("flood %s->%s %ds" % (a[1], a[2], secs))
-            elif kind == "delay":
-                net[a[1]].cmd("tc qdisc replace dev %s-eth0 root netem delay %sms" % (a[1], a[2]))
-                log_event("delay %s %sms" % (a[1], a[2]))
-            elif kind == "loss":
-                net[a[1]].cmd("tc qdisc replace dev %s-eth0 root netem loss %s%%" % (a[1], a[2]))
-                log_event("loss %s %s%%" % (a[1], a[2]))
-            elif kind == "killagent":
-                host = a[1]
-                if host not in PEERS:
-                    raise KeyError(host)
-                # Match the agent command line without matching this pkill shell.
-                net[host].cmd("pkill -f '[a]gent.py.*--id=%s' 2>/dev/null || true" % host)
-                log_event("killagent %s" % host)
-            elif kind == "linkdown":
-                net.configLinkStatus(a[1], a[2], "down")
-                self.downed.append((a[1], a[2]))
-                log_event("linkdown %s-%s" % (a[1], a[2]))
-            elif kind == "clear":
-                for h in PEERS:
-                    net[h].cmd("tc qdisc del dev %s-eth0 root 2>/dev/null" % h)
-                    net[h].cmd("pkill iperf 2>/dev/null || true")
-                self._stop_agents(net)
-                for s1, s2 in self.downed:
-                    net.configLinkStatus(s1, s2, "up")
-                self.downed = []
-                log_event("clear")
+            if kind == "clear":
+                self._clear_run_state(net)
+                self._last_cleanup_success = True
+            else:
+                self._cleanup_event_logged = False
+                event, activated_at = inject_fault(
+                    net, kind, a[1:], {"downed": self.downed,
+                                       "iperf": self.active_processes,
+                                       "agents": self.agent_processes,
+                                       "runtime_state": getattr(self, "runtime_state", {})})
+                # Append a success record only after verification, retaining the
+                # timestamp captured when the fault actually took effect.
+                log_event("FAULT_INJECTED " + event, timestamp=activated_at)
+                return
+        except Exception as exc:
+            if a and a[0] == "clear":
+                self._last_cleanup_success = False
+                log_cleanup_event("CLEANUP_FAILED: %s" % exc)
+                print("[cleanup] FAILED: " + str(exc))
             else:
                 message = "FAULT_FAILED %s: %s" % (a[0] if a else "<empty>", exc)
                 log_event(message)
