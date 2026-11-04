@@ -147,20 +147,9 @@ Each scenario is run in both baseline and dynamic mode for comparison.
 | 9 | Report, README, slides and demo complete | C (all review) | ____ |
 | 10 | Viva prep: everyone walks through the whole system | A, B, C | ____ |
 
-## Results Table (to be filled by Person C)
+## Results Table
 
-| Fault injected | Expected detection | Mode | Actual detection | Time to detect | Time to recover | Throughput | Latency | Packet loss |
-|---|---|---|---|---|---|---|---|---|
-| UDP flood | Congestion or flood | Baseline | | | | | | |
-| UDP flood | Congestion or flood | Dynamic | | | | | | |
-| Added delay | Latency anomaly | Baseline | | | | | | |
-| Added delay | Latency anomaly | Dynamic | | | | | | |
-| Packet loss | Loss or missing telemetry | Baseline | | | | | | |
-| Packet loss | Loss or missing telemetry | Dynamic | | | | | | |
-| Agent killed | Agent crash | Baseline | | | | | | |
-| Agent killed | Agent crash | Dynamic | | | | | | |
-| Link down | Host or link down | Baseline | | | | | | |
-| Link down | Host or link down | Dynamic | | | | | | |
+<img width="1600" height="678" alt="WhatsApp Image 2026-11-04 at 18 13 05" src="https://github.com/user-attachments/assets/76bf3537-d6e6-453d-8e9e-998471ef9ae9" />
 
 ## Repository Structure
 
